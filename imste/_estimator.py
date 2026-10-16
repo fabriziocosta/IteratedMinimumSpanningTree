@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import numbers
 import time
-import warnings
 from collections.abc import Callable
 
 import numpy as np
@@ -129,8 +128,8 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
         Number of embedding coordinates per sample.
     n_epochs : int, default=200
         Number of optimization epochs.
-    batch_size : int, default=4096
-        Deprecated compatibility parameter; ignored by both optimizer backends.
+    batch_size : int, default=32768
+        Maximum active edges per MPS update batch. Ignored by the CPU optimizer.
     learning_rate : float, default=0.05
         Base SGD step size; updates are sample-scaled and decay linearly by epoch.
     negative_ratio : int, default=5
@@ -180,7 +179,7 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
         n_msts: int = 15,
         n_components: int = 2,
         n_epochs: int = 200,
-        batch_size: int = 4096,
+        batch_size: int = 32768,
         learning_rate: float = 0.05,
         negative_ratio: int = 5,
         lambda_rep: float = 0.5,
@@ -229,12 +228,7 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
         n_msts = _positive_integer("n_msts", self.n_msts)
         n_components = _positive_integer("n_components", self.n_components)
         n_epochs = _positive_integer("n_epochs", self.n_epochs, allow_zero=True)
-        _positive_integer("batch_size", self.batch_size)
-        warnings.warn(
-            "batch_size is deprecated and ignored by the optimizer.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
+        batch_size = _positive_integer("batch_size", self.batch_size)
         negative_ratio = _positive_integer(
             "negative_ratio", self.negative_ratio, allow_zero=True
         )
@@ -316,10 +310,10 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
             from ._optimizer_mps import optimize_embedding_mps
 
             optimizer = optimize_embedding_mps
-        optimizer(
-            coordinates,
-            edges,
-            tree_ranks,
+            optimizer_batch_size = batch_size
+        else:
+            optimizer_batch_size = None
+        optimizer_kwargs = dict(
             n_epochs=n_epochs,
             learning_rate=learning_rate,
             negative_ratio=negative_ratio,
@@ -331,6 +325,14 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
             schedule_by_rank=self.mst_method != "prim",
             progress_callback=self.progress_callback,
             timing_callback=record_optimizer_timing,
+        )
+        if optimizer_batch_size is not None:
+            optimizer_kwargs["batch_size"] = optimizer_batch_size
+        optimizer(
+            coordinates,
+            edges,
+            tree_ranks,
+            **optimizer_kwargs,
         )
         self.embedding_optimization_time_ = time.perf_counter() - embedding_started
         self.optimizer_negative_sampling_time_ = optimizer_profile["negative_sampling"]

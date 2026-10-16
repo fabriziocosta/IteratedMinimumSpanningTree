@@ -154,6 +154,15 @@ def display_interactive_embedding(
         continuous_update=False,
         style={"description_width": "initial"},
     )
+    batch_size = widgets.IntSlider(
+        value=32768,
+        min=4096,
+        max=131072,
+        step=4096,
+        description="Batch size (MPS)",
+        continuous_update=False,
+        style={"description_width": "initial"},
+    )
     n_msts = widgets.IntSlider(
         value=15,
         min=1,
@@ -261,6 +270,10 @@ def display_interactive_embedding(
         description="Device",
         style={"description_width": "initial"},
     )
+    batch_size.layout.display = "none"
+
+    def update_batch_size_visibility(change) -> None:
+        batch_size.layout.display = "" if change["new"] == "mps" else "none"
 
     fit_button = widgets.Button(
         description="Fit embedding",
@@ -452,6 +465,7 @@ def display_interactive_embedding(
         negative_ratio.value = 5
         compute_knn.value = False
         n_epochs.value = 200
+        batch_size.value = 32768
         embedding_type.value = "transductive"
         mlp_n_layers.value = 6
         mlp_layer_size.value = 128
@@ -512,6 +526,7 @@ def display_interactive_embedding(
                     mst_max_neighbors=mst_max_neighbors.value,
                     n_components=2,
                     n_epochs=epochs,
+                    batch_size=batch_size.value,
                     learning_rate=0.05,
                     negative_ratio=negative_ratio.value,
                     lambda_rep=lambda_rep.value,
@@ -650,6 +665,7 @@ def display_interactive_embedding(
 
     dataset.observe(select_dataset, names="value")
     embedding_type.observe(update_estimator_controls, names="value")
+    device.observe(update_batch_size_visibility, names="value")
     fit_button.on_click(fit_and_display)
     reset_button.on_click(reset_sliders)
     mlp_button.on_click(show_mlp_predictions)
@@ -661,6 +677,7 @@ def display_interactive_embedding(
             widgets.HBox([mst_method]),
             widgets.HBox([mst_max_neighbors]),
             widgets.HBox([n_epochs]),
+            widgets.HBox([batch_size]),
             widgets.HBox([lambda_rep, negative_ratio]),
             widgets.HBox([logistic_margin, logistic_temperature]),
             widgets.HBox([compute_knn]),
@@ -692,6 +709,7 @@ def display_interactive_embedding(
             "dataset": dataset,
             "sample_count": sample_count,
             "n_epochs": n_epochs,
+            "batch_size": batch_size,
             "n_msts": n_msts,
             "mst_method": mst_method,
             "mst_max_neighbors": mst_max_neighbors,

@@ -34,6 +34,7 @@ def fit_and_plot_mst_3d(
     labels,
     n_msts=15,
     n_epochs=200,
+    batch_size=32768,
     learning_rate=0.05,
     negative_ratio=5,
     lambda_rep=0.5,
@@ -55,6 +56,7 @@ def fit_and_plot_mst_3d(
         n_msts=n_msts,
         n_components=3,
         n_epochs=n_epochs,
+        batch_size=batch_size,
         learning_rate=learning_rate,
         negative_ratio=negative_ratio,
         lambda_rep=lambda_rep,
@@ -201,6 +203,11 @@ def display_interactive_mst_3d(
         description="MSTs", continuous_update=False,
         style={"description_width": "initial"},
     )
+    batch_size = widgets.IntSlider(
+        value=32768, min=4096, max=131072, step=4096,
+        description="Batch size (MPS)", continuous_update=False,
+        style={"description_width": "initial"},
+    )
     mst_method = widgets.Dropdown(
         options=[("FAMST (approximate)", "famst"), ("Prim (exact)", "prim")],
         value="famst",
@@ -251,6 +258,10 @@ def display_interactive_mst_3d(
         description="Device",
         style={"description_width": "initial"},
     )
+    batch_size.layout.display = "none"
+
+    def update_batch_size_visibility(change) -> None:
+        batch_size.layout.display = "" if change["new"] == "mps" else "none"
 
     fit_button = widgets.Button(
         description="Fit 3D embedding",
@@ -267,6 +278,7 @@ def display_interactive_mst_3d(
     def reset_sliders(_=None):
         sample_count.value = min(1000, max_instances)
         n_msts.value = 15
+        batch_size.value = 32768
         mst_method.value = "famst"
         n_epochs.value = 200
         learning_rate.value = 0.05
@@ -290,6 +302,7 @@ def display_interactive_mst_3d(
                     X,
                     labels,
                     n_msts=n_msts.value,
+                    batch_size=batch_size.value,
                     mst_method=mst_method.value,
                     n_epochs=n_epochs.value,
                     learning_rate=learning_rate.value,
@@ -309,11 +322,13 @@ def display_interactive_mst_3d(
             finally:
                 fit_button.disabled = False
 
+    device.observe(update_batch_size_visibility, names="value")
     fit_button.on_click(fit_and_display)
     reset_button.on_click(reset_sliders)
     controls = widgets.VBox(
         [
             widgets.HBox([sample_count, n_msts]),
+            widgets.HBox([batch_size]),
             widgets.HBox([mst_method]),
             widgets.HBox([n_epochs, learning_rate]),
             widgets.HBox([negative_ratio, lambda_rep, epsilon]),
@@ -330,6 +345,7 @@ def display_interactive_mst_3d(
         "sliders": {
             "sample_count": sample_count,
             "n_msts": n_msts,
+            "batch_size": batch_size,
             "mst_method": mst_method,
             "n_epochs": n_epochs,
             "learning_rate": learning_rate,

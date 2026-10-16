@@ -177,7 +177,7 @@ embedding and do not extend or re-optimize its graph.
 | `n_msts` | `15` | Number of edge-disjoint spanning trees |
 | `n_components` | `2` | Embedding dimensions |
 | `n_epochs` | `200` | Coordinate-optimization epochs |
-| `batch_size` | `4096` | Deprecated compatibility parameter; ignored by sequential SGD |
+| `batch_size` | `32768` | Maximum active edges per MPS update batch; ignored by CPU optimizer |
 | `learning_rate` | `0.05` | Coordinate optimizer learning rate |
 | `negative_ratio` | `5` | Non-neighbors sampled per endpoint of each positive edge |
 | `lambda_rep` | `0.5` | Repulsion share, from 0 to 1 |
@@ -207,9 +207,9 @@ mapper = IteratedMinimumSpanningTreeEmbedder(
 embedding = mapper.fit_transform(X)
 ```
 
-MPS updates all active edges in an epoch from the same coordinate snapshot.
-This uses parallel GPU operations and can produce different coordinates from
-the sequential CPU SGD path, even with the same seed.
+MPS computes updates for each batch together, then applies batches sequentially.
+Larger batches can improve GPU utilization and use more memory; changing the
+batch size also changes the MPS update trajectory. CPU runs ignore this setting.
 
 ### MLP parameters
 

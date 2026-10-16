@@ -184,11 +184,11 @@ calibration factor chosen to match the former optimizer's default quality.
 After each epoch it subtracts the coordinate mean, removing global translation
 drift without changing pairwise differences. `device="auto"` and
 `device="cpu"` select the sequential CPU Numba optimizer. `device="mps"`
-selects a PyTorch MPS backend that batches active-edge updates from one
-coordinate snapshot per epoch; this parallel update path has a different
-trajectory from sequential SGD. The graph is built on CPU for both backends.
-`batch_size` remains temporarily for estimator compatibility but is deprecated
-and ignored.
+selects a PyTorch MPS backend that computes updates for each active-edge batch
+together and applies batches sequentially. This path has a different trajectory
+from sequential CPU SGD. The graph and negative samples are prepared on CPU for
+both backends. MPS batch size controls memory use and update grouping; CPU runs
+ignore it.
 
 The estimator uses Euclidean distance for graph construction and squared
 Euclidean distance in the embedding objective. Rank $r$ determines update
@@ -202,7 +202,7 @@ diagnostic.
 | `logistic_temperature` | 0.5 | Softness of the logistic repulsion; must be positive |
 | `n_components` | 2 | Number of output dimensions |
 | `n_epochs` | 200 | Number of rank-scheduled optimization epochs |
-| `batch_size` | 4096 | Deprecated compatibility parameter; ignored |
+| `batch_size` | 32768 | Maximum active edges per MPS batch; ignored by CPU optimizer |
 | `learning_rate` | 0.05 | Base SGD learning rate, sample-scaled and linearly decayed |
 | `negative_ratio` | 5 | Negative samples per endpoint of each positive edge |
 | `lambda_rep` | 0.5 | Repulsion share; attraction uses `1 - lambda_rep` |
