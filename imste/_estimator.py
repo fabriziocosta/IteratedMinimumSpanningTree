@@ -219,8 +219,9 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
     def fit(self, X: object, y: object = None) -> "IteratedMinimumSpanningTreeEmbedder":
         """Fit the embedding and store coordinates for the input rows.
 
-        Successful fits expose `graph_construction_time_`,
-        `embedding_optimization_time_`, and total `fit_time_` in seconds.
+        Successful fits expose stage timings in seconds: `graph_construction_time_`,
+        `embedding_optimization_time_`, `optimizer_negative_sampling_time_`,
+        `optimizer_coordinate_update_time_`, and total `fit_time_`.
         """
         fit_started = time.perf_counter()
         del y  # Unsupervised: labels are intentionally never used.
@@ -293,6 +294,14 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
         coordinates = (rng.standard_normal((n_samples, n_components)) * 1e-3).astype(
             np.float32
         )
+        optimizer_profile = {"negative_sampling": 0.0, "coordinate_updates": 0.0}
+
+        def record_optimizer_timing(
+            sampling_seconds: float, update_seconds: float
+        ) -> None:
+            optimizer_profile["negative_sampling"] += sampling_seconds
+            optimizer_profile["coordinate_updates"] += update_seconds
+
         optimize_embedding(
             coordinates,
             edges,
@@ -307,8 +316,11 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
             random_state=seed,
             schedule_by_rank=self.mst_method != "prim",
             progress_callback=self.progress_callback,
+            timing_callback=record_optimizer_timing,
         )
         self.embedding_optimization_time_ = time.perf_counter() - embedding_started
+        self.optimizer_negative_sampling_time_ = optimizer_profile["negative_sampling"]
+        self.optimizer_coordinate_update_time_ = optimizer_profile["coordinate_updates"]
         self.n_features_in_ = X_checked.shape[1]
         self.device_ = "cpu"
         if hasattr(X, "columns") and all(isinstance(c, str) for c in X.columns):
