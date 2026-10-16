@@ -149,8 +149,9 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
         ``'mps'`` selects batched PyTorch updates on an available Apple GPU.
     mst_method : {'prim', 'famst'}, default='famst'
         ``'prim'`` constructs exact edge-disjoint trees using dense pairwise
-        distances. ``'famst'`` uses a sparse approximate-neighbor graph and
-        FAMST-style component connection and refinement; uses PyNNDescent.
+        distances. ``'famst'`` uses a sparse neighbor graph and FAMST-style
+        component connection and refinement. It uses PyNNDescent on CPU and
+        exact chunked nearest-neighbor search on MPS when ``device='mps'``.
     mst_neighbors : int, default=15
         Minimum initial approximate-neighbor count for ``mst_method='famst'``.
         FAMST targets the larger of this value and ``2 * n_msts``, subject to
@@ -285,6 +286,7 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
             inter_component_edges=inter_component_edges,
             max_neighbors=max_neighbors,
             representatives_per_component=representatives_per_component,
+            neighbor_device=resolved_device,
             progress_callback=self.mst_progress_callback,
             return_ranks=True,
         )

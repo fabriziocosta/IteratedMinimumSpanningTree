@@ -261,7 +261,55 @@ def _ann_edges(
         n_jobs=-1,
     )
     indices, distances = index.neighbor_graph
+    return _neighbor_edges_to_dict(indices, distances)
+
+
+def _ann_edges_mps(X: np.ndarray, neighbors: int) -> dict[tuple[int, int], float]:
+    """Build an exact k-neighbor candidate graph with chunked MPS distances."""
+    import torch
+
+    if not torch.backends.mps.is_available():
+        raise RuntimeError("MPS neighbor search requires an available Apple GPU.")
+
+    device = torch.device("mps")
+    features = torch.as_tensor(X, dtype=torch.float32, device=device)
     n_samples = len(X)
+    norms = torch.sum(features * features, dim=1)
+    chunk_size = min(512, n_samples)
+    all_indices: list[np.ndarray] = []
+    all_distances: list[np.ndarray] = []
+
+    for start in range(0, n_samples, chunk_size):
+        stop = min(start + chunk_size, n_samples)
+        rows = torch.arange(start, stop, device=device)
+        query = features[start:stop]
+        distances_squared = (
+            norms[start:stop, None]
+            + norms[None, :]
+            - 2.0 * (query @ features.T)
+        ).clamp_min_(0.0)
+        distances_squared[torch.arange(stop - start, device=device), rows] = torch.inf
+        nearest_squared, nearest_indices = torch.topk(
+            distances_squared,
+            k=min(neighbors, n_samples - 1),
+            dim=1,
+            largest=False,
+            sorted=False,
+        )
+        all_indices.append(nearest_indices.cpu().numpy())
+        all_distances.append(torch.sqrt(nearest_squared).cpu().numpy())
+
+    return _neighbor_edges_to_dict(
+        np.concatenate(all_indices, axis=0),
+        np.concatenate(all_distances, axis=0),
+    )
+
+
+def _neighbor_edges_to_dict(
+    indices: np.ndarray, distances: np.ndarray
+) -> dict[tuple[int, int], float]:
+    """Make a deduplicated undirected weighted graph from a neighbor table."""
+    n_samples = indices.shape[0]
     left = np.repeat(np.arange(n_samples, dtype=np.int32), indices.shape[1])
     right = indices.reshape(-1).astype(np.int32, copy=False)
     distance = distances.reshape(-1)
@@ -440,9 +488,10 @@ def iterated_famst_edges(
     progress_callback: ProgressCallback | None = None,
     representatives_per_component: int = 10,
     *,
+    neighbor_device: str = "cpu",
     return_ranks: bool = False,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Build approximate edge-disjoint trees from an adaptive sparse graph."""
+    """Build edge-disjoint trees from an adaptive sparse neighbor graph."""
     n_samples = len(X)
     if n_samples <= 3:
         from .prim import iterated_prim_edges
@@ -480,7 +529,10 @@ def iterated_famst_edges(
         if progress_callback is not None:
             progress_callback(0, n_msts, detail)
         seed = int(rng.randint(0, np.iinfo(np.int32).max))
-        candidate_edges = _ann_edges(X, current_neighbors, seed)
+        if neighbor_device == "mps":
+            candidate_edges = _ann_edges_mps(X, current_neighbors)
+        else:
+            candidate_edges = _ann_edges(X, current_neighbors, seed)
         _connect_components(
             X,
             candidate_edges,

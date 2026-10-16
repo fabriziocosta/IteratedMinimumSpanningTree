@@ -186,9 +186,11 @@ drift without changing pairwise differences. `device="auto"` and
 `device="cpu"` select the sequential CPU Numba optimizer. `device="mps"`
 selects a PyTorch MPS backend that computes updates for each active-edge batch
 together and applies batches sequentially. This path has a different trajectory
-from sequential CPU SGD. The graph and negative samples are prepared on CPU for
-both backends. MPS batch size controls memory use and update grouping; CPU runs
-ignore it.
+from sequential CPU SGD. For FAMST, MPS also builds the exact chunked
+nearest-neighbor candidate graph on the GPU; component connection and tree
+extraction remain on CPU. MPS samples negative pairs and updates coordinates on
+the GPU, with a rare exact CPU fallback for unusually dense neighborhoods. MPS
+batch size controls memory use and update grouping; CPU runs ignore it.
 
 The estimator uses Euclidean distance for graph construction and squared
 Euclidean distance in the embedding objective. Rank $r$ determines update
@@ -271,17 +273,19 @@ $$
 |E|=R(n-1)
 $$
 
-The default `mst_method="famst"` backend builds an approximate
-nearest-neighbor graph. It samples up to `mst_representatives_per_component`
+The default `mst_method="famst"` backend builds a sparse nearest-neighbor
+graph. CPU builds use PyNNDescent; MPS builds use exact chunked nearest-neighbor
+search on the GPU. It samples up to `mst_representatives_per_component`
 points per ANN component, builds an exact MST over those representatives, and
 uses its cross-component edges to select unique component pairs for bridge
 search and refinement. It then extracts edge-disjoint trees from the candidate
 graph. For a fixed neighbor count and a small number of ANN components, its
 graph storage grows approximately linearly with the number of rows. Its result
 is approximate and does not guarantee the same trees as the complete Euclidean
-graph. The implementation uses PyNNDescent and can increase the neighbor count,
-within `mst_max_neighbors`, when the candidate graph lacks enough edge-disjoint
-trees. This follows the FAMST approach by Almansoori and Telek (2025).
+graph. The CPU implementation uses PyNNDescent. Both paths can increase the
+neighbor count, within `mst_max_neighbors`, when the candidate graph lacks
+enough edge-disjoint trees. This follows the FAMST approach by Almansoori and
+Telek (2025).
 
 Optimization cost grows with the number of epochs, graph edges, negative ratio,
 and output dimension. Let m denote the negative ratio and q the output

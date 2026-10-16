@@ -1,8 +1,8 @@
 """Batched PyTorch MPS optimizer for Apple GPUs.
 
 Each active-edge batch is applied simultaneously, with batches processed
-sequentially. Negative targets are sampled on CPU using the same sparse-graph
-rejection sampler as the Numba optimizer, then copied to MPS with the edges.
+sequentially. Negative targets are sampled on MPS by rejecting graph neighbors;
+rare dense-neighborhood fallbacks use an exact CPU complement sampler.
 """
 
 from __future__ import annotations
@@ -15,10 +15,79 @@ import torch
 
 from ._optimizer import (
     _active_edges_for_rank_epoch,
-    _sample_epoch_negatives,
     expected_active_edge_count,
     rank_phases,
 )
+
+
+def _sample_negative_targets_mps(
+    active_pairs: torch.Tensor,
+    degree: torch.Tensor,
+    adjacency_keys: torch.Tensor,
+    adjacency_keys_cpu: np.ndarray,
+    n_samples: int,
+    negative_ratio: int,
+    seed: int,
+) -> torch.Tensor:
+    """Rejection-sample non-neighbors on MPS, with a rare exact CPU fallback."""
+    n_edges = active_pairs.shape[0]
+    if negative_ratio == 0:
+        return torch.empty((n_edges, 2, 0), dtype=torch.long, device="mps")
+
+    sources = (
+        active_pairs.unsqueeze(2)
+        .expand(n_edges, 2, negative_ratio)
+        .reshape(-1)
+    )
+    eligible = degree.index_select(0, sources) < n_samples - 1
+    generator = torch.Generator(device="mps")
+    generator.manual_seed(seed)
+    candidate_targets = torch.randint(
+        n_samples,
+        (sources.numel(), 4),
+        dtype=torch.long,
+        device="mps",
+        generator=generator,
+    )
+    candidate_sources = sources.unsqueeze(1).expand_as(candidate_targets)
+    keys = candidate_sources * n_samples + candidate_targets
+    locations = torch.searchsorted(adjacency_keys, keys.reshape(-1))
+    in_bounds = locations < adjacency_keys.numel()
+    bounded_locations = torch.clamp(locations, max=adjacency_keys.numel() - 1)
+    blocked = adjacency_keys.index_select(0, bounded_locations) == keys.reshape(-1)
+    blocked &= in_bounds
+    valid = (
+        (candidate_targets != candidate_sources)
+        & ~blocked.reshape_as(candidate_targets)
+        & eligible.unsqueeze(1)
+    )
+    has_candidate = valid.any(dim=1)
+    selected = valid.to(torch.int64).argmax(dim=1)
+    targets = candidate_targets.gather(1, selected.unsqueeze(1)).squeeze(1)
+    invalid = ~has_candidate & eligible
+    failed_positions = torch.nonzero(invalid, as_tuple=False).flatten()
+    if failed_positions.numel():
+        failed_sources = sources.index_select(0, failed_positions).cpu().numpy()
+        failed_positions_cpu = failed_positions.cpu().numpy()
+        fallback_rng = np.random.RandomState(seed)
+        fallback_targets = np.empty(len(failed_sources), dtype=np.int64)
+        for fallback_index, source in enumerate(failed_sources):
+            start = int(source) * n_samples
+            first = np.searchsorted(adjacency_keys_cpu, start)
+            last = np.searchsorted(adjacency_keys_cpu, start + n_samples)
+            blocked = adjacency_keys_cpu[first:last] - start
+            available = np.ones(n_samples, dtype=bool)
+            available[int(source)] = False
+            available[blocked] = False
+            fallback_targets[fallback_index] = int(
+                fallback_rng.choice(np.flatnonzero(available))
+            )
+        targets_cpu = targets.cpu().numpy()
+        targets_cpu[failed_positions_cpu] = fallback_targets
+        targets = torch.as_tensor(targets_cpu, dtype=torch.long, device="mps")
+
+    targets = targets.masked_fill(~eligible, -1)
+    return targets.reshape(n_edges, 2, negative_ratio)
 
 
 def optimize_embedding_mps(
@@ -62,18 +131,21 @@ def optimize_embedding_mps(
     source = source[order]
     target = target[order]
     counts = np.bincount(source, minlength=n_samples)
-    indptr = np.empty(n_samples + 1, dtype=np.int64)
-    indptr[0] = 0
-    np.cumsum(counts, out=indptr[1:])
-    adjacency = target.astype(np.int64, copy=False)
-    degree = np.diff(indptr)
+    degree = counts.astype(np.int64, copy=False)
+    adjacency_keys_cpu = source.astype(np.int64, copy=False) * n_samples + target
 
     device = torch.device("mps")
     coordinates = torch.as_tensor(embedding, dtype=torch.float32, device=device)
     edge_tensor = torch.as_tensor(edge_pairs, dtype=torch.long, device=device)
     rank_tensor = torch.as_tensor(ranks, dtype=torch.float32, device=device)
+    degree_tensor = torch.as_tensor(degree, dtype=torch.long, device=device)
+    adjacency_keys = torch.as_tensor(
+        adjacency_keys_cpu, dtype=torch.long, device=device
+    )
     seed_rng = np.random.RandomState(random_state)
-    sampling_seconds = 0.0
+    sampling_events = []
+    update_events = []
+    use_device_events = timing_callback is not None and hasattr(torch.mps, "Event")
     optimizer_started = perf_counter()
 
     for epoch in range(n_epochs):
@@ -99,29 +171,27 @@ def optimize_embedding_mps(
         batch_seed_rng = np.random.RandomState(sampling_seed)
         for batch_start in range(0, len(active), batch_size):
             active_batch = active[batch_start : batch_start + batch_size]
-            sample_started = perf_counter()
-            if negative_count > 0:
-                negatives, _ = _sample_epoch_negatives(
-                    active_batch,
-                    edge_pairs,
-                    degree,
-                    indptr,
-                    adjacency,
-                    n_samples,
-                    negative_ratio,
-                    int(batch_seed_rng.randint(0, np.iinfo(np.int32).max)),
-                )
-            else:
-                negatives = np.empty((len(active_batch), 2, 0), dtype=np.int64)
-            sampling_seconds += perf_counter() - sample_started
-
             active_tensor = torch.as_tensor(
                 active_batch, dtype=torch.long, device=device
             )
-            negatives_tensor = torch.as_tensor(
-                negatives, dtype=torch.long, device=device
-            )
             active_pairs = edge_tensor.index_select(0, active_tensor)
+            sampling_start = sampling_end = update_end = None
+            if use_device_events:
+                sampling_start = torch.mps.Event(enable_timing=True)
+                sampling_end = torch.mps.Event(enable_timing=True)
+                update_end = torch.mps.Event(enable_timing=True)
+                sampling_start.record()
+            negatives_tensor = _sample_negative_targets_mps(
+                active_pairs,
+                degree_tensor,
+                adjacency_keys,
+                adjacency_keys_cpu,
+                n_samples,
+                negative_ratio if lambda_rep > 0.0 else 0,
+                int(batch_seed_rng.randint(0, np.iinfo(np.int32).max)),
+            )
+            if sampling_end is not None:
+                sampling_end.record()
             left = active_pairs[:, 0]
             right = active_pairs[:, 1]
 
@@ -165,6 +235,10 @@ def optimize_embedding_mps(
                 updates.index_add_(0, negative_targets, -negative_updates)
 
             coordinates.add_(updates)
+            if update_end is not None:
+                update_end.record()
+                sampling_events.append((sampling_start, sampling_end))
+                update_events.append((sampling_end, update_end))
 
         coordinates.sub_(coordinates.mean(dim=0, keepdim=True))
         if progress_callback is not None:
@@ -173,5 +247,21 @@ def optimize_embedding_mps(
     torch.mps.synchronize()
     embedding[...] = coordinates.cpu().numpy()
     if timing_callback is not None:
-        elapsed = perf_counter() - optimizer_started
-        timing_callback(sampling_seconds, max(0.0, elapsed - sampling_seconds))
+        if use_device_events:
+            try:
+                sampling_seconds = sum(
+                    start.elapsed_time(end) for start, end in sampling_events
+                ) / 1000.0
+                update_seconds = sum(
+                    start.elapsed_time(end) for start, end in update_events
+                ) / 1000.0
+            except RuntimeError:
+                # Some PyTorch MPS builds can return out-of-order timestamps
+                # for recorded events. Timing is diagnostic only, so preserve
+                # the completed fit and fall back to the synchronized wall time.
+                sampling_seconds = 0.0
+                update_seconds = perf_counter() - optimizer_started
+        else:
+            sampling_seconds = 0.0
+            update_seconds = perf_counter() - optimizer_started
+        timing_callback(sampling_seconds, update_seconds)

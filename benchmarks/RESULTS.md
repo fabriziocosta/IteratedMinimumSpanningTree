@@ -43,6 +43,26 @@ fit time across two runs; its trustworthiness was 0.9808 and kNN preservation
 was 0.1336. Small graphs retain geometric neighbor growth to avoid jumping to
 an unnecessarily large candidate graph.
 
+## M5 Pro 60,000-row MPS utilization experiment
+
+MNIST `mnist_784` was loaded from the local OpenML cache, stratified to 60,000
+rows, and standardized. The run used 15 MSTs, 500 epochs, FAMST with 120
+neighbors (cap 512), seed 42, `device="mps"`, batch size 131,072, and negative
+ratio 30. FAMST's exact chunked MPS neighbor search was enabled for this run.
+The Mac's `ioreg` `Device Utilization %` value was sampled every 0.5 seconds and
+split between graph construction and optimization using the epoch callback.
+
+| Stage | Time (s) | `ioreg` samples | Mean GPU utilization | Peak |
+| --- | ---: | ---: | ---: | ---: |
+| FAMST graph build | 10.27 | 15 | 42.1% | 100% |
+| MPS optimization | 42.96 | 78 | 90.4% | 98% |
+| Whole fit sample mean | 53.31 | 93 | 82.6% | 100% |
+
+The embedding was finite and the graph contained 899,985 edges. The ratio-30
+setting is an explicit workload choice, not a default: it samples more negative
+pairs and takes substantially longer than ratio 5. GPU utilization depends on
+the selected negative ratio, batch size, data, and other system activity.
+
 Reproduce with:
 
 ```sh

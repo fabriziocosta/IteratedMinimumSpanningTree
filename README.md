@@ -23,9 +23,9 @@ For notebooks, install the optional plotting and widget dependencies:
 python -m pip install ".[notebook]"
 ```
 
-The default sparse approximate FAMST graph builder uses PyNNDescent, which is
-installed with the package. To use only the exact Prim builder, select
-`mst_method="prim"`.
+The default CPU FAMST graph builder uses PyNNDescent, which is installed with
+the package. MPS uses exact chunked nearest-neighbor search for FAMST. To use
+only the exact Prim builder, select `mst_method="prim"`.
 
 ## Quick start
 
@@ -187,15 +187,17 @@ embedding and do not extend or re-optimize its graph.
 | `random_state` | `42` | Seed for initialization, shuffling, and sampling |
 | `device` | `"auto"` | `"auto"` and `"cpu"` select CPU; `"mps"` selects Apple's PyTorch GPU backend |
 | `mst_method` | `"famst"` | Sparse approximate `"famst"` or exact dense `"prim"` |
-| `mst_neighbors` | `15` | Initial ANN neighbors for FAMST |
+| `mst_neighbors` | `15` | Initial candidate neighbors for FAMST |
 | `mst_inter_component_edges` | `5` | Candidate connections per FAMST component pair |
 | `mst_representatives_per_component` | `10` | Maximum representatives per component for selecting FAMST bridge pairs |
 | `mst_max_neighbors` | `None` | FAMST neighbor cap; defaults to four times `mst_neighbors` |
 
-The selected device is available as `mapper.device_` after fitting. The graph
-is built on CPU for every setting. `device="auto"` keeps the CPU optimizer;
-choose `device="mps"` to use batched coordinate updates on an available Apple
-GPU. MPS requires `torch.backends.mps.is_available()` to be true. For example:
+The selected device is available as `mapper.device_` after fitting.
+`device="auto"` keeps graph construction and optimization on CPU. With
+`device="mps"`, FAMST builds its exact chunked nearest-neighbor candidate graph
+on the Apple GPU, then performs component connection and tree extraction on
+CPU; the batched optimizer also runs on MPS. MPS requires
+`torch.backends.mps.is_available()` to be true. For example:
 
 ```python
 mapper = IteratedMinimumSpanningTreeEmbedder(
@@ -207,9 +209,12 @@ mapper = IteratedMinimumSpanningTreeEmbedder(
 embedding = mapper.fit_transform(X)
 ```
 
-MPS computes updates for each batch together, then applies batches sequentially.
-Larger batches can improve GPU utilization and use more memory; changing the
-batch size also changes the MPS update trajectory. CPU runs ignore this setting.
+MPS samples negative pairs and computes updates for each batch on the GPU, then
+applies batches sequentially. A rare exact CPU fallback handles unusually dense
+neighborhoods. MPS and CPU builds use different neighbor-search methods, so
+their graph and embedding can differ. Larger batches can improve GPU utilization
+and use more memory; changing the batch size also changes the MPS update
+trajectory. CPU runs ignore this setting.
 
 ### MLP parameters
 

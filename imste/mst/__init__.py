@@ -19,6 +19,7 @@ def build_mst_edges(
     inter_component_edges: int,
     max_neighbors: int | None,
     representatives_per_component: int = 10,
+    neighbor_device: str = "cpu",
     progress_callback: Callable[[int, int, str], None] | None = None,
     return_ranks: bool = False,
 ) -> tuple[np.ndarray, np.ndarray]:
@@ -40,6 +41,7 @@ def build_mst_edges(
             max_neighbors,
             progress_callback,
             representatives_per_component,
+            neighbor_device=neighbor_device,
             return_ranks=return_ranks,
         )
     raise ValueError("mst_method must be either 'prim' or 'famst'.")
