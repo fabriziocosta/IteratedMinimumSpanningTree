@@ -8,6 +8,7 @@ import traceback
 import ipywidgets as widgets
 import matplotlib.pyplot as plt
 import numpy as np
+import torch
 from IPython.display import HTML, clear_output, display
 from sklearn.model_selection import StratifiedKFold, cross_val_score
 from sklearn.neighbors import KNeighborsClassifier
@@ -28,6 +29,13 @@ DATASET_LABELS = {
     "fashion_mnist": "Fashion-MNIST",
     "kmnist": "Kuzushiji-MNIST",
 }
+
+
+def _available_devices() -> list[str]:
+    devices = ["auto", "cpu"]
+    if torch.backends.mps.is_available():
+        devices.append("mps")
+    return devices
 
 
 def _load_balanced_pool(
@@ -248,7 +256,7 @@ def display_interactive_embedding(
     projection_controls.layout.display = "none"
     device_default = "auto"
     device = widgets.Dropdown(
-        options=["auto", "cpu"],
+        options=_available_devices(),
         value=device_default,
         description="Device",
         style={"description_width": "initial"},

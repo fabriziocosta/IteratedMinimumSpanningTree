@@ -182,11 +182,13 @@ samples sequentially. Linear learning-rate decay is applied across epochs.
 The normalized mean gradient is rescaled by the sample count, with a
 calibration factor chosen to match the former optimizer's default quality.
 After each epoch it subtracts the coordinate mean, removing global translation
-drift without changing pairwise differences. The Numba optimizer runs on CPU;
-`device="auto"` and `device="cpu"` select CPU, while `device="mps"` is
-unsupported. `batch_size` remains temporarily for estimator compatibility but
-is deprecated and ignored. This SGD path preserves the objective's normalized
-mean conventions, not Adam's update trajectory.
+drift without changing pairwise differences. `device="auto"` and
+`device="cpu"` select the sequential CPU Numba optimizer. `device="mps"`
+selects a PyTorch MPS backend that batches active-edge updates from one
+coordinate snapshot per epoch; this parallel update path has a different
+trajectory from sequential SGD. The graph is built on CPU for both backends.
+`batch_size` remains temporarily for estimator compatibility but is deprecated
+and ignored.
 
 The estimator uses Euclidean distance for graph construction and squared
 Euclidean distance in the embedding objective. Rank $r$ determines update
@@ -206,11 +208,10 @@ diagnostic.
 | `lambda_rep` | 0.5 | Repulsion share; attraction uses `1 - lambda_rep` |
 | `epsilon` | `1e-4` | Smoothing for the pairwise edge probability |
 | `random_state` | 42 | Seed for initialization, shuffling, and sampling |
-| `device` | `auto` | CPU Numba optimizer; MPS is unsupported |
+| `device` | `auto` | `auto`/`cpu` use Numba CPU; `mps` uses batched PyTorch MPS updates |
 
-The graph and pairwise distances are constructed on the CPU. The Torch
-dependency remains for the separate inductive MLP and public reference loss
-functions; it is not used by the transductive optimizer.
+The graph and pairwise distances are constructed on the CPU. The transductive
+optimizer uses Numba on CPU or PyTorch on MPS, depending on `device`.
 
 ## 6. Practical use
 

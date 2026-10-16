@@ -9,6 +9,7 @@ import ipywidgets as widgets
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
+import torch
 from IPython.display import clear_output, display
 from sklearn.manifold import trustworthiness
 from sklearn.model_selection import StratifiedKFold, cross_val_score
@@ -19,6 +20,13 @@ try:  # Notebook execution puts this directory directly on sys.path.
 except ModuleNotFoundError:  # Also support importing as notebooks.digits_3d.
     from .digits_sweep import format_duration, load_mnist_data
 from imste import IteratedMinimumSpanningTreeEmbedder
+
+
+def _available_devices() -> list[str]:
+    devices = ["auto", "cpu"]
+    if torch.backends.mps.is_available():
+        devices.append("mps")
+    return devices
 
 
 def fit_and_plot_mst_3d(
@@ -238,7 +246,7 @@ def display_interactive_mst_3d(
     )
     device_default = "auto"
     device = widgets.Dropdown(
-        options=["auto", "cpu"],
+        options=_available_devices(),
         value=device_default,
         description="Device",
         style={"description_width": "initial"},

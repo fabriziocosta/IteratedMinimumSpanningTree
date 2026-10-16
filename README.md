@@ -110,9 +110,11 @@ positive edge contributes `negative_ratio`
 sampled non-neighbors from each eligible endpoint. The CPU Numba optimizer uses
 float32 coordinates, linear learning-rate decay, and recenters once per epoch.
 It rescales the mean objective by sample count to retain a useful per-coordinate
-SGD step size.
-Fixed seeds reproduce a run with the same implementation; coordinates need
-not match the former Adam optimizer.
+SGD step size. The optional MPS backend applies each epoch's edge updates as a
+GPU batch, so its update trajectory differs from the sequential CPU optimizer.
+Fixed seeds reproduce CPU runs with the same implementation; MPS batch
+accumulation can introduce small floating-point differences. CPU and MPS
+coordinates need not match each other or the former Adam optimizer.
 
 The default `mst_method="famst"` builds an approximate sparse graph. It can
 increase the neighbor count as needed, subject to `mst_max_neighbors`. Select
@@ -183,15 +185,31 @@ embedding and do not extend or re-optimize its graph.
 | `logistic_temperature` | `0.5` | Logistic repulsion softness; must be positive |
 | `epsilon` | `1e-4` | Smoothing for the logarithmic attraction |
 | `random_state` | `42` | Seed for initialization, shuffling, and sampling |
-| `device` | `"auto"` | `"auto"` and `"cpu"` select CPU; MPS is unsupported |
+| `device` | `"auto"` | `"auto"` and `"cpu"` select CPU; `"mps"` selects Apple's PyTorch GPU backend |
 | `mst_method` | `"famst"` | Sparse approximate `"famst"` or exact dense `"prim"` |
 | `mst_neighbors` | `15` | Initial ANN neighbors for FAMST |
 | `mst_inter_component_edges` | `5` | Candidate connections per FAMST component pair |
 | `mst_representatives_per_component` | `10` | Maximum representatives per component for selecting FAMST bridge pairs |
 | `mst_max_neighbors` | `None` | FAMST neighbor cap; defaults to four times `mst_neighbors` |
 
-The selected device is available as `mapper.device_` after fitting. The
-transductive optimizer runs on CPU; `device="mps"` raises a clear error.
+The selected device is available as `mapper.device_` after fitting. The graph
+is built on CPU for every setting. `device="auto"` keeps the CPU optimizer;
+choose `device="mps"` to use batched coordinate updates on an available Apple
+GPU. MPS requires `torch.backends.mps.is_available()` to be true. For example:
+
+```python
+mapper = IteratedMinimumSpanningTreeEmbedder(
+    n_msts=5,
+    n_epochs=500,
+    device="mps",
+    random_state=42,
+)
+embedding = mapper.fit_transform(X)
+```
+
+MPS updates all active edges in an epoch from the same coordinate snapshot.
+This uses parallel GPU operations and can produce different coordinates from
+the sequential CPU SGD path, even with the same seed.
 
 ### MLP parameters
 

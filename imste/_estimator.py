@@ -130,7 +130,7 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
     n_epochs : int, default=200
         Number of optimization epochs.
     batch_size : int, default=4096
-        Deprecated compatibility parameter. Sequential SGD no longer batches edges.
+        Deprecated compatibility parameter; ignored by both optimizer backends.
     learning_rate : float, default=0.05
         Base SGD step size; updates are sample-scaled and decay linearly by epoch.
     negative_ratio : int, default=5
@@ -145,8 +145,9 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
         Seed controlling initialization, edge ordering, and negative sampling.
     epsilon : float, default=1e-4
         Smoothing added to squared distances in the logarithmic attraction.
-    device : {'auto', 'cpu'}, default='auto'
-        Numba optimizer device. Both values select CPU; ``'mps'`` is unsupported.
+    device : {'auto', 'cpu', 'mps'}, default='auto'
+        Optimizer device. ``'auto'`` and ``'cpu'`` select the Numba CPU backend;
+        ``'mps'`` selects batched PyTorch updates on an available Apple GPU.
     mst_method : {'prim', 'famst'}, default='famst'
         ``'prim'`` constructs exact edge-disjoint trees using dense pairwise
         distances. ``'famst'`` uses a sparse approximate-neighbor graph and
@@ -230,7 +231,7 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
         n_epochs = _positive_integer("n_epochs", self.n_epochs, allow_zero=True)
         _positive_integer("batch_size", self.batch_size)
         warnings.warn(
-            "batch_size is deprecated and ignored by the sequential Numba optimizer.",
+            "batch_size is deprecated and ignored by the optimizer.",
             DeprecationWarning,
             stacklevel=2,
         )
@@ -267,10 +268,18 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
         n_samples = X_checked.shape[0]
         if n_samples < 2:
             raise ValueError("X must contain at least two samples to construct an MST.")
-        if self.device not in {"auto", "cpu"}:
-            if self.device == "mps":
-                raise ValueError("device='mps' is unsupported by the CPU Numba optimizer.")
-            raise ValueError("device must be one of 'auto' or 'cpu'.")
+        if self.device not in {"auto", "cpu", "mps"}:
+            raise ValueError("device must be one of 'auto', 'cpu', or 'mps'.")
+        resolved_device = "cpu"
+        if self.device == "mps":
+            import torch
+
+            if not torch.backends.mps.is_available():
+                raise RuntimeError(
+                    "device='mps' requires an MPS-capable PyTorch installation on a "
+                    "Mac with a supported Apple GPU."
+                )
+            resolved_device = "mps"
 
         graph_started = time.perf_counter()
         edges, tree_ranks = build_mst_edges(
@@ -302,7 +311,12 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
             optimizer_profile["negative_sampling"] += sampling_seconds
             optimizer_profile["coordinate_updates"] += update_seconds
 
-        optimize_embedding(
+        optimizer = optimize_embedding
+        if resolved_device == "mps":
+            from ._optimizer_mps import optimize_embedding_mps
+
+            optimizer = optimize_embedding_mps
+        optimizer(
             coordinates,
             edges,
             tree_ranks,
@@ -322,7 +336,7 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
         self.optimizer_negative_sampling_time_ = optimizer_profile["negative_sampling"]
         self.optimizer_coordinate_update_time_ = optimizer_profile["coordinate_updates"]
         self.n_features_in_ = X_checked.shape[1]
-        self.device_ = "cpu"
+        self.device_ = resolved_device
         if hasattr(X, "columns") and all(isinstance(c, str) for c in X.columns):
             self.feature_names_in_ = np.asarray(X.columns, dtype=object)
         elif hasattr(self, "feature_names_in_"):

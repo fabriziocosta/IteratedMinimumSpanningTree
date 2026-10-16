@@ -183,8 +183,9 @@ def test_no_eligible_negative_pairs_is_supported():
     assert np.isfinite(estimator.embedding_).all()
 
 
-def test_mps_device_is_rejected_by_cpu_numba_optimizer():
-    with pytest.raises(ValueError, match="unsupported by the CPU Numba optimizer"):
+def test_mps_device_requires_available_backend(monkeypatch):
+    monkeypatch.setattr(torch.backends.mps, "is_available", lambda: False)
+    with pytest.raises(RuntimeError, match="MPS-capable PyTorch installation"):
         IteratedMinimumSpanningTreeEmbedder(
             n_msts=1, n_epochs=0, random_state=5, device="mps"
         ).fit(small_data())
