@@ -2,7 +2,7 @@
 
 **Iterated Minimum Spanning Tree Embedding (IMSTE)** is a scikit-learn
 transformer for learning low-dimensional coordinates from numeric data. It
-builds a weighted graph from edge-disjoint minimum spanning trees, then
+builds a weighted graph from ranked minimum spanning trees, then
 optimizes one coordinate vector per sample.
 
 The package has two explicit estimators: `IteratedMinimumSpanningTreeEmbedder`
@@ -73,13 +73,18 @@ FAMST starts with an approximate k-nearest-neighbor graph. It samples up to
 `mst_representatives_per_component` points from each component, builds an exact
 MST over those representatives, and searches bridge candidates only for the
 unique component pairs crossed by that MST. The default representative cap is
-10. It refines those connections and extracts edge-disjoint trees from the
-sparse candidate graph. FAMST can increase the neighbor count when needed, up to
-`mst_max_neighbors` (by default, four times `mst_neighbors`). The result is
-approximate and is not guaranteed to match the trees from the complete
-Euclidean graph. The sparse mode also samples negative pairs without allocating
-the core estimator's quadratic adjacency bit matrix. The implementation follows
-Almansoori and Telek's [FAMST paper](https://arxiv.org/abs/2507.14261).
+10. It refines those connections and extracts trees from the sparse candidate
+graph. FAMST can increase the neighbor count when needed, up to
+`mst_max_neighbors` (by default, four times `mst_neighbors`). If earlier trees
+leave a local bottleneck, later trees reuse only the edges needed to reconnect
+the residual components. Every reuse increments that edge's rank, lowering its
+attraction weight to `1 / rank`. The requested `n_msts` is therefore the number
+of tree iterations, not a promise that every edge is unique across trees. The
+result is approximate and is not guaranteed to match the trees from the
+complete Euclidean graph. The sparse mode also samples negative pairs without
+allocating the core estimator's quadratic adjacency bit matrix. The
+implementation follows Almansoori and Telek's
+[FAMST paper](https://arxiv.org/abs/2507.14261).
 
 The labels are not passed to the estimator. Use them afterward to color or
 score a visualization if needed.
@@ -89,12 +94,14 @@ score a visualization if needed.
 ### Build a graph
 
 The estimator computes pairwise Euclidean distances, constructs `n_msts`
-edge-disjoint minimum spanning trees, and joins their edges into one graph.
-For the approximate FAMST graph, an edge selected in tree rank `r` is scheduled
-once every `r` epochs on average. Exact Prim processes every edge each epoch and
+spanning-tree iterations, and joins their ranked edges into one graph. An edge
+used for the first time receives that tree's rank. When a bottleneck requires
+reusing it, its rank increments by one, so the repeated edge receives less
+weight. For the approximate FAMST graph, an edge of rank `r` is scheduled once
+every `r` epochs on average. Exact Prim processes every edge each epoch and
 scales its attraction by `1 / r`. Both modes use the same normalized
-inverse-rank objective. The estimator exposes integer ranks as `graph_ranks_`
-and weights as `graph_weights_ = 1 / rank`.
+inverse-rank objective. The estimator exposes these integer ranks as
+`graph_ranks_` and weights as `graph_weights_ = 1 / rank`.
 
 ### Optimize coordinates
 
@@ -117,9 +124,10 @@ accumulation can introduce small floating-point differences. CPU and MPS
 coordinates need not match each other or the former Adam optimizer.
 
 The default `mst_method="famst"` builds an approximate sparse graph. It can
-increase the neighbor count as needed, subject to `mst_max_neighbors`. Select
-`mst_method="prim"` for exact edge-disjoint trees from dense pairwise
-distances, which use quadratic time and memory in the number of samples.
+increase the neighbor count as needed, subject to `mst_max_neighbors`, then
+reuse bottleneck edges with an increasing rank penalty. Select
+`mst_method="prim"` for exact trees from dense pairwise distances, which use
+quadratic time and memory in the number of samples.
 
 ## Choose how to transform rows
 
@@ -174,7 +182,7 @@ embedding and do not extend or re-optimize its graph.
 
 | Parameter | Default | Meaning |
 | --- | ---: | --- |
-| `n_msts` | `15` | Number of edge-disjoint spanning trees |
+| `n_msts` | `15` | Number of spanning-tree iterations; bottleneck edge reuse is penalized by incrementing its rank |
 | `n_components` | `2` | Embedding dimensions |
 | `n_epochs` | `200` | Coordinate-optimization epochs |
 | `batch_size` | `32768` | Maximum active edges per MPS update batch; ignored by CPU optimizer |

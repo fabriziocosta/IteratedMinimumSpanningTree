@@ -2,8 +2,10 @@
 
 This follows the FAMST paper's ANN graph, component-connection, local
 inter-component refinement, then Kruskal pipeline. Unlike the paper's single
-tree output, this implementation extracts edge-disjoint trees from the sparse
-candidate graph and increases the ANN neighborhood size when necessary.
+tree output, this implementation extracts ranked trees from the sparse
+candidate graph, reuses only edges needed to connect residual bottlenecks with
+an increasing rank penalty, and increases the ANN neighborhood size as a final
+graph-construction fallback.
 """
 
 from __future__ import annotations
@@ -421,6 +423,7 @@ def _extract_ranked_msts(
     n_msts: int,
 ) -> tuple[np.ndarray, np.ndarray, int]:
     active = np.ones(len(src), dtype=np.uint8)
+    edge_last_rank = np.zeros(len(src), dtype=np.int32)
     result_edges = np.empty((n_msts * max(0, n_samples - 1), 2), dtype=np.int64)
     result_ranks = np.empty(n_msts * max(0, n_samples - 1), dtype=np.int32)
     output = 0
@@ -439,25 +442,52 @@ def _extract_ranked_msts(
                 result_edges[output, 0] = left
                 result_edges[output, 1] = right
                 result_ranks[output] = rank
+                edge_last_rank[edge_index] = rank
                 output += 1
                 count += 1
                 active[edge_index] = 0
                 if count == n_samples - 1:
                     break
         if count != n_samples - 1:
+            # Preserve the requested tree count when a sparse candidate graph
+            # has a local edge bottleneck. Reuse only edges needed to connect
+            # the residual forest, incrementing that edge's rank each time so
+            # repeated use is progressively penalized.
+            for order_position in range(len(order)):
+                edge_index = order[order_position]
+                if active[edge_index] != 0:
+                    continue
+                left = src[edge_index]
+                right = dst[edge_index]
+                if _union_roots(parent, sizes, left, right):
+                    result_edges[output, 0] = left
+                    result_edges[output, 1] = right
+                    edge_last_rank[edge_index] += 1
+                    result_ranks[output] = edge_last_rank[edge_index]
+                    output += 1
+                    count += 1
+                    if count == n_samples - 1:
+                        break
+        if count != n_samples - 1:
             return result_edges[:output], result_ranks[:output], completed
         completed += 1
     return result_edges[:output], result_ranks[:output], completed
 
 
-def _kruskal_edge_disjoint_trees(
+def _kruskal_ranked_trees(
     n_samples: int,
     candidate_edges: dict[tuple[int, int], float],
     n_msts: int,
     progress_callback: ProgressCallback | None = None,
     progress_detail: str = "FAMST",
-) -> tuple[np.ndarray, np.ndarray] | None:
+    *,
+    return_partial: bool = False,
+):
     if not candidate_edges:
+        if return_partial:
+            empty_edges = np.empty((0, 2), dtype=np.intp)
+            empty_ranks = np.empty(0, dtype=np.int32)
+            return None, empty_edges, empty_ranks, 0
         return None
     pairs = np.asarray(list(candidate_edges), dtype=np.int64)
     distances = np.fromiter(
@@ -471,11 +501,53 @@ def _kruskal_edge_disjoint_trees(
         pairs[:, 0], pairs[:, 1], order.astype(np.int64), n_samples, n_msts
     )
     if completed != n_msts:
+        if return_partial:
+            return None, result_edges, result_ranks, completed
         return None
     for rank in range(1, n_msts + 1):
         if progress_callback is not None:
             progress_callback(rank, n_msts, progress_detail)
-    return result_edges.astype(np.intp), result_ranks
+    trees = result_edges.astype(np.intp), result_ranks
+    if return_partial:
+        return trees, result_edges, result_ranks, completed
+    return trees
+
+
+def _repair_candidate_graph_for_next_tree(
+    X: np.ndarray,
+    candidate_edges: dict[tuple[int, int], float],
+    partial_edges: np.ndarray,
+    partial_ranks: np.ndarray,
+    completed_trees: int,
+    n_candidates: int,
+    rng: np.random.RandomState,
+    representatives_per_component: int,
+) -> int:
+    """Add bridges only where earlier trees disconnect the residual graph."""
+    used_edges = {
+        (min(int(left), int(right)), max(int(left), int(right)))
+        for (left, right), rank in zip(partial_edges, partial_ranks)
+        if int(rank) <= completed_trees
+    }
+    removed_weights = {
+        edge: candidate_edges.pop(edge)
+        for edge in used_edges
+        if edge in candidate_edges
+    }
+    bridges, _ = _connect_components(
+        X,
+        candidate_edges,
+        n_candidates,
+        rng,
+        representatives_per_component,
+    )
+    added_edges = {
+        (min(left, right), max(left, right))
+        for left, right, _, _ in bridges
+        if (min(left, right), max(left, right)) not in removed_weights
+    }
+    candidate_edges.update(removed_weights)
+    return len(added_edges)
 
 
 def iterated_famst_edges(
@@ -491,7 +563,7 @@ def iterated_famst_edges(
     neighbor_device: str = "cpu",
     return_ranks: bool = False,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Build edge-disjoint trees from an adaptive sparse neighbor graph."""
+    """Build ranked trees from an adaptive sparse neighbor graph."""
     n_samples = len(X)
     if n_samples <= 3:
         from .prim import iterated_prim_edges
@@ -540,13 +612,33 @@ def iterated_famst_edges(
             rng,
             representatives_per_component,
         )
-        trees = _kruskal_edge_disjoint_trees(
-            n_samples,
-            candidate_edges,
-            n_msts,
-            progress_callback=progress_callback,
-            progress_detail=detail,
-        )
+        trees = None
+        for repair_attempt in range(max(1, n_msts)):
+            trees, partial_edges, partial_ranks, completed = (
+                _kruskal_ranked_trees(
+                    n_samples,
+                    candidate_edges,
+                    n_msts,
+                    progress_callback=progress_callback,
+                    progress_detail=detail,
+                    return_partial=True,
+                )
+            )
+            if trees is not None:
+                break
+            added = _repair_candidate_graph_for_next_tree(
+                X,
+                candidate_edges,
+                partial_edges,
+                partial_ranks,
+                completed,
+                inter_component_edges,
+                rng,
+                representatives_per_component,
+            )
+            if added == 0:
+                break
+            detail = f"FAMST local repair ({added} edges added)"
         if trees is not None:
             edges, ranks = trees
             if return_ranks:
@@ -554,9 +646,10 @@ def iterated_famst_edges(
             return edges, 1.0 / ranks.astype(np.float64)
         if current_neighbors >= cap:
             raise ValueError(
-                f"FAMST candidate graph could not supply {n_msts} edge-disjoint "
-                f"spanning trees with up to {current_neighbors} neighbors. "
-                "Increase mst_max_neighbors or reduce n_msts."
+                f"FAMST candidate graph could not supply {n_msts} connected "
+                f"ranked spanning-tree iterations across all {n_samples} samples "
+                f"with up to {current_neighbors} neighbors, even after local "
+                "repair and bottleneck edge reuse. Increase mst_max_neighbors."
             )
         # A failed candidate graph means another full NNDescent build is
         # required. When the cap is close, skip intermediate rebuilds; for a

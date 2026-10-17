@@ -114,7 +114,11 @@ def _sample_sparse_negative_targets(
 
 
 class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
-    """Learn training-row coordinates from edge-disjoint minimum spanning trees.
+    """Learn training-row coordinates from ranked iterated spanning trees.
+
+    Trees use unused edges where possible. When a residual graph has a local
+    bottleneck, only the edges needed to reconnect its components are reused;
+    each reuse increments that edge's rank and lowers its attraction weight.
 
     This is the transductive estimator. ``transform`` returns the learned
     coordinates only for the exact training matrix in its original row order.
@@ -123,7 +127,8 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
     Parameters
     ----------
     n_msts : int, default=15
-        Number of edge-disjoint minimum spanning trees to construct.
+        Number of spanning-tree iterations to construct. Bottleneck edges may
+        be reused, with their rank incremented each time.
     n_components : int, default=2
         Number of embedding coordinates per sample.
     n_epochs : int, default=200
@@ -148,10 +153,12 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
         Optimizer device. ``'auto'`` and ``'cpu'`` select the Numba CPU backend;
         ``'mps'`` selects batched PyTorch updates on an available Apple GPU.
     mst_method : {'prim', 'famst'}, default='famst'
-        ``'prim'`` constructs exact edge-disjoint trees using dense pairwise
-        distances. ``'famst'`` uses a sparse neighbor graph and FAMST-style
-        component connection and refinement. It uses PyNNDescent on CPU and
-        exact chunked nearest-neighbor search on MPS when ``device='mps'``.
+        ``'prim'`` constructs exact trees using dense pairwise distances.
+        ``'famst'`` uses a sparse neighbor graph and FAMST-style component
+        connection and refinement. Both modes reuse an edge only when required
+        to connect a residual bottleneck, incrementing its rank for each reuse.
+        FAMST uses PyNNDescent on CPU and exact chunked nearest-neighbor search
+        on MPS when ``device='mps'``.
     mst_neighbors : int, default=15
         Minimum initial approximate-neighbor count for ``mst_method='famst'``.
         FAMST targets the larger of this value and ``2 * n_msts``, subject to
@@ -164,8 +171,8 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
         component pairs with a representative MST.
     mst_max_neighbors : int or None, default=None
         Maximum approximate-neighbor count. ``None`` allows the FAMST builder to
-        increase the count up to four times its starting neighbor count to obtain
-        the requested number of edge-disjoint trees.
+        increase the count up to four times its starting neighbor count before
+        reusing residual bottleneck edges.
     progress_callback : callable or None, default=None
         Optional function called with ``(completed_epochs, total_epochs)`` after
         each optimization epoch.

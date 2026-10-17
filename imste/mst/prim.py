@@ -1,4 +1,4 @@
-"""Exact dense Prim construction for edge-disjoint Euclidean MSTs."""
+"""Exact dense Prim construction for iterated Euclidean spanning trees."""
 
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ def iterated_prim_edges(
     *,
     return_ranks: bool = False,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Return exact edge-disjoint MSTs using dense Prim.
+    """Return exact trees using dense Prim, reusing bottleneck edges as needed.
 
     Pairwise distances are computed once and retained while each tree is
     constructed. This preserves exact behavior but requires quadratic memory.
@@ -37,7 +37,7 @@ def iterated_prim_distance_edges(
     *,
     return_ranks: bool = False,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Construct edge-disjoint MSTs from a precomputed distance matrix."""
+    """Construct ranked trees, penalizing an edge each time it is reused."""
     n_samples = distances.shape[0]
 
     # A packed bit matrix stores which edges remain available after earlier
@@ -52,28 +52,52 @@ def iterated_prim_distance_edges(
     edges: list[tuple[int, int]] = []
     weights: list[float] = []
     ranks: list[int] = []
+    edge_last_rank: dict[tuple[int, int], int] = {}
 
     for rank in range(1, n_msts + 1):
         in_tree = np.zeros(n_samples, dtype=bool)
         best = np.full(n_samples, np.inf, dtype=np.float64)
         parent = np.full(n_samples, -1, dtype=np.intp)
+        parent_reused = np.zeros(n_samples, dtype=bool)
         best[0] = 0.0
 
         for _ in range(n_samples):
             candidates = np.where(in_tree, np.inf, best)
             node = int(np.argmin(candidates))
             if not np.isfinite(candidates[node]):
-                raise ValueError(
-                    f"Could not construct MST {rank}: removing earlier trees left "
-                    "the available graph disconnected. Reduce n_msts."
-                )
+                # The unused graph cannot cross this cut. Reuse its shortest
+                # complete-graph edge and increment that edge's penalty rank.
+                remaining = np.flatnonzero(~in_tree)
+                best_distance = np.inf
+                best_left = -1
+                best_right = -1
+                for left in np.flatnonzero(in_tree):
+                    distances_to_remaining = distances[left, remaining]
+                    offset = int(np.argmin(distances_to_remaining))
+                    distance = float(distances_to_remaining[offset])
+                    if distance < best_distance:
+                        best_distance = distance
+                        best_left = int(left)
+                        best_right = int(remaining[offset])
+                if best_left < 0 or best_right < 0:
+                    raise ValueError(f"Could not connect all samples in tree {rank}.")
+                node = best_right
+                best[node] = best_distance
+                parent[node] = best_left
+                parent_reused[node] = True
 
             in_tree[node] = True
             if parent[node] != -1:
                 other = int(parent[node])
+                edge = (min(other, node), max(other, node))
+                if parent_reused[node]:
+                    edge_rank = edge_last_rank[edge] + 1
+                else:
+                    edge_rank = rank
+                edge_last_rank[edge] = edge_rank
                 edges.append((other, node))
-                weights.append(1.0 / rank)
-                ranks.append(rank)
+                weights.append(1.0 / edge_rank)
+                ranks.append(edge_rank)
                 available[other, node >> 3] &= np.uint8(
                     0xFF ^ (1 << (node & 7))
                 )
@@ -86,9 +110,10 @@ def iterated_prim_distance_edges(
                 available[node], bitorder="little", count=n_samples
             ).astype(bool)
             connectable = remaining & available_row
-            improve = connectable & (distances[node] < best)
+            improve = connectable & (distances[node] <= best)
             best[improve] = distances[node, improve]
             parent[improve] = node
+            parent_reused[improve] = False
         if progress_callback is not None:
             progress_callback(rank, n_msts, "Prim")
 
