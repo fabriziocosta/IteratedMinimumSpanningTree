@@ -182,6 +182,38 @@ best validation loss. The IMSTE coordinates use all input rows; the validation
 split only controls MLP early stopping. Predictions approximate the reference
 embedding and do not extend or re-optimize its graph.
 
+## Render an embedding
+
+Reusable Matplotlib renderers for the kNN hull union and fitted ellipses, plus
+an interactive label-guided force viewer, live in `imste.visualization`. Install
+the notebook extras first (`python -m pip install "imste[notebook]"`), then pass
+an embedding and either a one-dimensional label vector or a metadata DataFrame.
+
+```python
+from imste.visualization import interactive_force, plot_ellipses, plot_knn_union
+from IPython.display import display
+
+fig, ax = plot_knn_union(
+    mapper, labels, k=7, cv_neighbors=30, cv_splits=5,
+    distance_std_threshold=0.75,
+)
+fig, ax = plot_ellipses(
+    mapper, labels, k=7, n_std=2.0, max_ellipses_per_region=2,
+)
+viewer = interactive_force(
+    mapper, labels, initial_k=10, initial_iterations=20,
+)
+display(viewer)
+```
+
+For a DataFrame, select its label column with `label_key="cell_type"`. Each
+renderer returns its Matplotlib figure and axes, except `interactive_force`,
+which returns an `ipywidgets` viewer. The force controls adjust same-label
+springs, different-label repulsion, iteration count, and movement. Renderers
+accept a fitted `IteratedMinimumSpanningTreeEmbedder` or `InductiveIMSTE`
+directly; they use `embedding_` or the inductive model's `reference_embedding_`.
+Raw coordinate arrays remain supported.
+
 ## Parameters
 
 | Parameter | Default | Meaning |
