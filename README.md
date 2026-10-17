@@ -184,13 +184,19 @@ embedding and do not extend or re-optimize its graph.
 
 ## Render an embedding
 
-Reusable Matplotlib renderers for the kNN hull union and fitted ellipses, plus
-an interactive label-guided force viewer, live in `imste.visualization`. Install
-the notebook extras first (`python -m pip install "imste[notebook]"`), then pass
+Reusable Matplotlib renderers for the KDE density-parent tree, kNN hull union,
+and fitted ellipses, plus an interactive label-guided force viewer, live in
+`imste.visualization`. Install the notebook extras first
+(`python -m pip install "imste[notebook]"`), then pass
 an embedding and either a one-dimensional label vector or a metadata DataFrame.
 
 ```python
-from imste.visualization import interactive_force, plot_ellipses, plot_knn_union
+from imste.visualization import (
+    interactive_force,
+    plot_density_parent_tree,
+    plot_ellipses,
+    plot_knn_union,
+)
 from IPython.display import display
 
 fig, ax = plot_knn_union(
@@ -200,6 +206,7 @@ fig, ax = plot_knn_union(
 fig, ax = plot_ellipses(
     mapper, labels, k=7, n_std=2.0, max_ellipses_per_region=2,
 )
+fig, ax = plot_density_parent_tree(mapper, labels, label_key="cell_type")
 viewer = interactive_force(
     mapper, labels, initial_k=10, initial_iterations=20,
 )

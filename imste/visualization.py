@@ -11,11 +11,13 @@ from html import escape as html_escape
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+from matplotlib.collections import LineCollection
 from matplotlib.lines import Line2D
 from matplotlib.patches import Ellipse, Patch, PathPatch
 from matplotlib.path import Path as MplPath
 from scipy import ndimage
-from scipy.spatial import ConvexHull, QhullError
+from scipy.spatial import ConvexHull, QhullError, cKDTree
+from scipy.stats import gaussian_kde
 from sklearn.cluster import KMeans
 from sklearn.metrics import (
     accuracy_score,
@@ -180,6 +182,147 @@ def plot_embedding(
         ax=ax,
         legend_position=legend_position,
     )
+
+
+def plot_density_parent_tree(
+    embedding: np.ndarray,
+    labels,
+    *,
+    label_key: str | None = None,
+    point_size: float = 8,
+    point_alpha: float = 0.0,
+    edge_alpha: float = 0.5,
+    cross_label_edge_alpha: float = 0.1,
+    edge_alpha_exponent: float = 1.2,
+    linewidth: float = 0.7,
+    k: int = 40,
+    edge_length_std_threshold: float = 0.85,
+    ax=None,
+    legend_position: str = "bottom",
+):
+    """Plot a KDE density-parent graph over a labeled 2D embedding.
+
+    Each point connects to its ``k`` nearest points with higher KDE density,
+    or all such points when fewer than ``k`` exist. Equal-density points are
+    ordered by row index so every non-root point has a parent. Parent links
+    fade with rank, and unusually long links can be filtered by their length.
+    """
+    coordinates = _embedding_array(embedding)
+    obs, label_key = _as_observations(labels, label_key)
+    if coordinates.ndim != 2 or coordinates.shape[1] != 2:
+        raise ValueError("embedding must be a two-dimensional coordinate array.")
+    if len(obs) != len(coordinates):
+        raise ValueError("obs rows must match the embedding rows.")
+    if label_key not in obs:
+        raise KeyError(f"Label column {label_key!r} is not present in obs.")
+    if len(coordinates) < 2 or not np.isfinite(coordinates).all():
+        raise ValueError("embedding must contain at least two finite coordinates.")
+    if legend_position not in {"inside", "right", "bottom"}:
+        raise ValueError("legend_position must be 'inside', 'right', or 'bottom'.")
+    if not np.isfinite(edge_length_std_threshold) or edge_length_std_threshold < 0:
+        raise ValueError("edge_length_std_threshold must be finite and non-negative.")
+    if not np.isfinite(edge_alpha_exponent) or edge_alpha_exponent < 0:
+        raise ValueError("edge_alpha_exponent must be finite and non-negative.")
+    if not np.isfinite(edge_alpha) or not 0.0 <= edge_alpha <= 1.0:
+        raise ValueError("edge_alpha must be between 0 and 1.")
+    if not np.isfinite(cross_label_edge_alpha) or not 0.0 <= cross_label_edge_alpha <= 1.0:
+        raise ValueError("cross_label_edge_alpha must be between 0 and 1.")
+    if isinstance(k, (bool, np.bool_)) or not isinstance(k, (int, np.integer)) or k < 1:
+        raise ValueError("k must be a positive integer.")
+    k = min(int(k), len(coordinates) - 1)
+
+    density = gaussian_kde(coordinates.T)(coordinates.T)
+    density_order = np.lexsort((np.arange(len(coordinates)), density))
+    density_rank = np.empty(len(coordinates), dtype=np.intp)
+    density_rank[density_order] = np.arange(len(coordinates))
+
+    parents = np.full((len(coordinates), k), -1, dtype=np.intp)
+    unresolved = density_order[:-1].copy()
+    search_tree = cKDTree(coordinates)
+    neighbor_count = min(max(2, k + 1), len(coordinates))
+    while unresolved.size:
+        _, neighbors = search_tree.query(
+            coordinates[unresolved], k=neighbor_count, workers=-1
+        )
+        if neighbor_count == 1:
+            neighbors = neighbors[:, None]
+        higher_density = density_rank[neighbors] > density_rank[unresolved, None]
+        enough_parents = higher_density.sum(axis=1) >= k
+        all_neighbors_seen = neighbor_count == len(coordinates)
+        resolved_mask = enough_parents | all_neighbors_seen
+        if np.any(resolved_mask):
+            resolved_neighbors = neighbors[resolved_mask]
+            resolved_higher_density = higher_density[resolved_mask]
+            for row_index, point_index in enumerate(unresolved[resolved_mask]):
+                higher_neighbors = resolved_neighbors[row_index][
+                    resolved_higher_density[row_index]
+                ]
+                parents[point_index, :min(k, len(higher_neighbors))] = higher_neighbors[:k]
+        unresolved = unresolved[~resolved_mask]
+        if unresolved.size:
+            neighbor_count = min(2 * neighbor_count, len(coordinates))
+
+    categories = pd.Categorical(obs[label_key])
+    palette = plt.get_cmap("tab20", max(len(categories.categories), 1))
+    point_colors = palette(
+        np.clip(categories.codes, 0, max(len(categories.categories) - 1, 0))
+    )
+    point_colors[categories.codes < 0] = (0.5, 0.5, 0.5, 1.0)
+    edge_mask = parents >= 0
+    child_grid, edge_rank_grid = np.indices(parents.shape)
+    child_indices = child_grid[edge_mask]
+    parent_indices = parents[edge_mask]
+    edge_ranks = edge_rank_grid[edge_mask] + 1
+    edge_lengths = np.linalg.norm(
+        coordinates[child_indices] - coordinates[parent_indices], axis=1
+    )
+    mean_edge_length = float(edge_lengths.mean())
+    std_edge_length = float(edge_lengths.std())
+    edge_cutoff = mean_edge_length + edge_length_std_threshold * std_edge_length
+    keep_edge = edge_lengths <= edge_cutoff
+    children, parent_indices = child_indices[keep_edge], parent_indices[keep_edge]
+    segments = np.stack((coordinates[children], coordinates[parent_indices]), axis=1)
+    edge_colors = (point_colors[children] + point_colors[parent_indices]) / 2
+    edge_ranks = edge_ranks[keep_edge]
+    cross_label = categories.codes[children] != categories.codes[parent_indices]
+    base_alpha = np.where(cross_label, cross_label_edge_alpha, edge_alpha)
+    edge_colors[:, 3] *= base_alpha / edge_ranks**edge_alpha_exponent
+
+    if ax is None:
+        fig, ax = plt.subplots(figsize=(10, 8))
+    else:
+        fig = ax.figure
+    ax.add_collection(LineCollection(segments, colors=edge_colors, linewidths=linewidth, zorder=1))
+    ax.scatter(
+        coordinates[:, 0], coordinates[:, 1], c=point_colors,
+        s=point_size, alpha=point_alpha, linewidths=0, zorder=2,
+    )
+    ax.set_title(
+        f"KDE density-parent graph (k={k}); mean edge {mean_edge_length:.3g}; "
+        f"{int((~keep_edge).sum())} edges omitted (>{edge_length_std_threshold:g} SD)"
+    )
+    ax.set_xlabel("IMSTE 1")
+    ax.set_ylabel("IMSTE 2")
+    ax.set_aspect("equal", adjustable="box")
+    handles = [
+        Line2D([], [], marker="o", linestyle="none", color=palette(index),
+               markersize=6, label=str(value))
+        for index, value in enumerate(categories.categories)
+    ]
+    if np.any(categories.codes < 0):
+        handles.append(Line2D([], [], marker="o", linestyle="none", color="0.5",
+                              markersize=6, label="(missing)"))
+    if legend_position == "right":
+        legend_options = {"bbox_to_anchor": (1.02, 1), "loc": "upper left", "frameon": False}
+    elif legend_position == "bottom":
+        legend_options = {
+            "bbox_to_anchor": (0.5, -0.16), "loc": "upper center",
+            "ncol": min(7, max(1, len(categories.categories))), "frameon": False,
+        }
+    else:
+        legend_options = {"loc": "upper right", "frameon": True, "framealpha": 0.8}
+    ax.legend(handles, [handle.get_label() for handle in handles], title=label_key, **legend_options)
+    return fig, ax
 
 
 def cross_validate_embedding_knn(
@@ -1266,6 +1409,7 @@ def plot_ellipses(
 __all__ = [
     "cross_validate_embedding_knn",
     "interactive_force",
+    "plot_density_parent_tree",
     "plot_ellipses",
     "plot_embedding",
     "plot_knn_union",
