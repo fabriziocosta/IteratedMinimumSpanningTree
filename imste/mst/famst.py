@@ -13,6 +13,7 @@ from __future__ import annotations
 from collections.abc import Callable
 
 import numpy as np
+from scipy.sparse import csr_matrix, issparse
 from numba import njit
 
 
@@ -65,12 +66,41 @@ def _components(n_samples: int, edges: dict[tuple[int, int], float]):
     return labels, groups
 
 
-def _distance(X: np.ndarray, left: int, right: int) -> float:
+def _distance(X, left: int, right: int) -> float:
+    if issparse(X):
+        left_row = X[left : left + 1]
+        right_row = X[right : right + 1]
+        value = float(
+            left_row.multiply(left_row).sum()
+            + right_row.multiply(right_row).sum()
+            - 2.0 * left_row.multiply(right_row).sum()
+        )
+        value = float(np.sqrt(max(value, 0.0)))
+        if not np.isfinite(value):
+            raise ValueError("Pairwise distances overflowed; rescale X before fitting.")
+        return value
     delta = X[left] - X[right]
     value = float(np.sqrt(np.dot(delta, delta)))
     if not np.isfinite(value):
         raise ValueError("Pairwise distances overflowed; rescale X before fitting.")
     return value
+
+
+def _paired_squared_distances(X, left: np.ndarray, right: np.ndarray) -> np.ndarray:
+    """Squared distances for aligned row pairs, preserving sparse inputs."""
+    if issparse(X):
+        left_rows = X[left]
+        right_rows = X[right]
+        left_norm = np.asarray(left_rows.multiply(left_rows).sum(axis=1)).ravel()
+        right_norm = np.asarray(right_rows.multiply(right_rows).sum(axis=1)).ravel()
+        products = np.asarray(left_rows.multiply(right_rows).sum(axis=1)).ravel()
+        distances = np.maximum(left_norm + right_norm - 2.0 * products, 0.0)
+    else:
+        deltas = X[left] - X[right]
+        distances = np.einsum("ij,ij->i", deltas, deltas)
+    if not np.isfinite(distances).all():
+        raise ValueError("Pairwise distances overflowed; rescale X before fitting.")
+    return distances
 
 
 @njit(cache=True)
@@ -147,6 +177,60 @@ def _refine_bridges(
             refined[bridge_index, 1] = best_right
             refined[bridge_index, 2] = left_component
             refined[bridge_index, 3] = right_component
+        bridges = refined
+    return bridges
+
+
+def _refine_bridges_sparse(
+    X,
+    labels: np.ndarray,
+    indptr: np.ndarray,
+    neighbors: np.ndarray,
+    bridges: np.ndarray,
+) -> np.ndarray:
+    """Sparse equivalent of the compiled bridge refinement loop."""
+    changed = True
+    while changed:
+        changed = False
+        refined = np.empty_like(bridges)
+        for bridge_index, bridge in enumerate(bridges):
+            left, right, left_component, right_component = map(int, bridge)
+            best_left, best_right = left, right
+            best_distance = _paired_squared_distances(
+                X,
+                np.asarray([left], dtype=np.intp),
+                np.asarray([right], dtype=np.intp),
+            )[0]
+            for offset in range(indptr[left], indptr[left + 1]):
+                candidate_left = int(neighbors[offset])
+                if labels[candidate_left] != left_component:
+                    continue
+                distance = _paired_squared_distances(
+                    X,
+                    np.asarray([candidate_left], dtype=np.intp),
+                    np.asarray([best_right], dtype=np.intp),
+                )[0]
+                if distance < best_distance:
+                    best_left, best_distance = candidate_left, distance
+            for offset in range(indptr[right], indptr[right + 1]):
+                candidate_right = int(neighbors[offset])
+                if labels[candidate_right] != right_component:
+                    continue
+                distance = _paired_squared_distances(
+                    X,
+                    np.asarray([best_left], dtype=np.intp),
+                    np.asarray([candidate_right], dtype=np.intp),
+                )[0]
+                if distance < best_distance:
+                    best_right, best_distance = candidate_right, distance
+            if best_left != left or best_right != right:
+                changed = True
+            refined[bridge_index] = (
+                best_left,
+                best_right,
+                left_component,
+                right_component,
+            )
         bridges = refined
     return bridges
 
@@ -231,7 +315,11 @@ def _representative_component_pairs(
     )
     n_representatives = len(points)
     component_pairs: set[tuple[int, int]] = set()
-    tree_edges = _representative_prim(X, points, components)
+    tree_edges = (
+        _representative_prim_sparse(X, points, components)
+        if issparse(X)
+        else _representative_prim(X, points, components)
+    )
     if n_representatives > 1 and len(tree_edges) != n_representatives - 1:
         raise ValueError("Could not construct an MST over component representatives.")
     for left_value, right_value in tree_edges:
@@ -240,6 +328,34 @@ def _representative_component_pairs(
             component_pairs.add((min(left, right), max(left, right)))
 
     return sorted(component_pairs)
+
+
+def _representative_prim_sparse(X, points: np.ndarray, components: np.ndarray) -> np.ndarray:
+    """Prim over a bounded representative set without densifying feature rows."""
+    n_representatives = len(points)
+    selected = np.zeros(n_representatives, dtype=bool)
+    best = np.full(n_representatives, np.inf, dtype=np.float64)
+    parents = np.full(n_representatives, -1, dtype=np.intp)
+    best[0] = 0.0
+    tree_edges = np.empty((max(0, n_representatives - 1), 2), dtype=np.int64)
+    edge_count = 0
+    for _ in range(n_representatives):
+        candidates = np.where(selected, np.inf, best)
+        current = int(np.argmin(candidates))
+        if not np.isfinite(candidates[current]):
+            return tree_edges[:0]
+        selected[current] = True
+        parent = int(parents[current])
+        if parent >= 0:
+            tree_edges[edge_count] = (components[current], components[parent])
+            edge_count += 1
+        left_points = np.full(n_representatives, points[current], dtype=np.intp)
+        right_points = points
+        distances = _paired_squared_distances(X, left_points, right_points)
+        improve = ~selected & (distances < best)
+        best[improve] = distances[improve]
+        parents[improve] = current
+    return tree_edges[:edge_count]
 
 
 def _ann_edges(
@@ -257,7 +373,7 @@ def _ann_edges(
 
     index = NNDescent(
         X,
-        n_neighbors=min(neighbors + 1, len(X)),
+        n_neighbors=min(neighbors + 1, X.shape[0]),
         metric="euclidean",
         random_state=random_state,
         n_jobs=-1,
@@ -275,7 +391,7 @@ def _ann_edges_mps(X: np.ndarray, neighbors: int) -> dict[tuple[int, int], float
 
     device = torch.device("mps")
     features = torch.as_tensor(X, dtype=torch.float32, device=device)
-    n_samples = len(X)
+    n_samples = X.shape[0]
     norms = torch.sum(features * features, dim=1)
     chunk_size = min(512, n_samples)
     all_indices: list[np.ndarray] = []
@@ -347,7 +463,8 @@ def _connect_components(
 
     Each candidate stores (left, right, left_component, right_component).
     """
-    labels, groups = _components(len(X), edges)
+    n_samples = X.shape[0]
+    labels, groups = _components(n_samples, edges)
     if len(groups) <= 1:
         return [], labels
 
@@ -361,13 +478,12 @@ def _connect_components(
         draw_count = n_candidates * n_candidates
         left_draws = np.asarray(rng.choice(left_points, size=draw_count), dtype=np.int64)
         right_draws = np.asarray(rng.choice(right_points, size=draw_count), dtype=np.int64)
-        candidate_keys = left_draws * len(X) + right_draws
+        candidate_keys = left_draws * n_samples + right_draws
         _, first_draws = np.unique(candidate_keys, return_index=True)
         first_draws.sort()
         left_unique = left_draws[first_draws]
         right_unique = right_draws[first_draws]
-        deltas = X[left_unique] - X[right_unique]
-        distance_squared = np.einsum("ij,ij->i", deltas, deltas)
+        distance_squared = _paired_squared_distances(X, left_unique, right_unique)
         best_indices = np.argsort(distance_squared, kind="stable")[:n_candidates]
         bridge_rows.extend(
             (int(left_unique[index]), int(right_unique[index]), left_component, right_component)
@@ -377,8 +493,11 @@ def _connect_components(
     bridges = np.asarray(bridge_rows, dtype=np.int64).reshape(-1, 4)
     if len(bridges):
         edge_pairs = np.asarray(list(edges), dtype=np.int64).reshape(-1, 2)
-        indptr, neighbors = _undirected_csr(edge_pairs, len(X))
-        bridges = _refine_bridges(X, labels, indptr, neighbors, bridges)
+        indptr, neighbors = _undirected_csr(edge_pairs, n_samples)
+        if issparse(X):
+            bridges = _refine_bridges_sparse(X, labels, indptr, neighbors, bridges)
+        else:
+            bridges = _refine_bridges(X, labels, indptr, neighbors, bridges)
 
     bridge_result = []
     for left_value, right_value, left_component, right_component in bridges:
@@ -564,7 +683,9 @@ def iterated_famst_edges(
     return_ranks: bool = False,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Build ranked trees from an adaptive sparse neighbor graph."""
-    n_samples = len(X)
+    if issparse(X):
+        X = csr_matrix(X)
+    n_samples = X.shape[0]
     if n_samples <= 3:
         from .prim import iterated_prim_edges
 
@@ -601,7 +722,7 @@ def iterated_famst_edges(
         if progress_callback is not None:
             progress_callback(0, n_msts, detail)
         seed = int(rng.randint(0, np.iinfo(np.int32).max))
-        if neighbor_device == "mps":
+        if neighbor_device == "mps" and not issparse(X):
             candidate_edges = _ann_edges_mps(X, current_neighbors)
         else:
             candidate_edges = _ann_edges(X, current_neighbors, seed)

@@ -23,9 +23,12 @@ For notebooks, install the optional plotting and widget dependencies:
 python -m pip install ".[notebook]"
 ```
 
+Both estimators accept dense arrays and SciPy CSR matrices. The graph builders
+keep CSR inputs sparse. `InductiveIMSTE` densifies only each MLP mini-batch.
 The default CPU FAMST graph builder uses PyNNDescent, which is installed with
-the package. MPS uses exact chunked nearest-neighbor search for FAMST. To use
-only the exact Prim builder, select `mst_method="prim"`.
+the package. MPS uses exact chunked nearest-neighbor search for dense FAMST
+inputs; CSR inputs use PyNNDescent on CPU for graph construction. To use only
+the exact Prim builder, select `mst_method="prim"`.
 
 ## Quick start
 
@@ -126,8 +129,9 @@ coordinates need not match each other or the former Adam optimizer.
 The default `mst_method="famst"` builds an approximate sparse graph. It can
 increase the neighbor count as needed, subject to `mst_max_neighbors`, then
 reuse bottleneck edges with an increasing rank penalty. Select
-`mst_method="prim"` for exact trees from dense pairwise distances, which use
-quadratic time and memory in the number of samples.
+`mst_method="prim"` for exact trees. Dense input uses quadratic pairwise
+memory; CSR input avoids the all-pairs distance matrix but still takes
+quadratic time.
 
 ## Choose how to transform rows
 

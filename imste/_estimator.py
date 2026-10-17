@@ -7,6 +7,7 @@ import time
 from collections.abc import Callable
 
 import numpy as np
+from scipy.sparse import csr_matrix, issparse
 from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.utils.validation import check_array, check_is_fitted
 
@@ -123,6 +124,7 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
     This is the transductive estimator. ``transform`` returns the learned
     coordinates only for the exact training matrix in its original row order.
     Use :class:`imste.inductive.InductiveIMSTE` to project new rows.
+    Dense arrays and SciPy CSR matrices are supported.
 
     Parameters
     ----------
@@ -153,7 +155,8 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
         Optimizer device. ``'auto'`` and ``'cpu'`` select the Numba CPU backend;
         ``'mps'`` selects batched PyTorch updates on an available Apple GPU.
     mst_method : {'prim', 'famst'}, default='famst'
-        ``'prim'`` constructs exact trees using dense pairwise distances.
+        ``'prim'`` constructs exact trees; CSR inputs avoid an all-pairs
+        distance matrix but still take quadratic time.
         ``'famst'`` uses a sparse neighbor graph and FAMST-style component
         connection and refinement. Both modes reuse an edge only when required
         to connect a residual bottleneck, incrementing its rank for each reuse.
@@ -266,7 +269,11 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
         logistic_temperature = _finite_nonnegative(
             "logistic_temperature", self.logistic_temperature, strictly_positive=True
         )
-        X_checked = check_array(X, dtype=np.float64, ensure_2d=True)
+        X_checked = check_array(
+            X, dtype=np.float64, ensure_2d=True, accept_sparse="csr"
+        )
+        if issparse(X_checked):
+            X_checked = csr_matrix(X_checked)
         n_samples = X_checked.shape[0]
         if n_samples < 2:
             raise ValueError("X must contain at least two samples to construct an MST.")
@@ -364,15 +371,29 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
         """Return fitted coordinates for the exact training rows only."""
         check_is_fitted(self, attributes=["embedding_", "X_fit_"])
         self._check_feature_names(X)
-        X_checked = check_array(X, dtype=np.float64, ensure_2d=True)
+        X_checked = check_array(
+            X, dtype=np.float64, ensure_2d=True, accept_sparse="csr"
+        )
+        if issparse(X_checked):
+            X_checked = csr_matrix(X_checked)
         if X_checked.shape[1] != self.n_features_in_:
             raise ValueError(
                 f"X has {X_checked.shape[1]} features, but this estimator was fitted "
                 f"with {self.n_features_in_} features."
             )
-        if X_checked.shape == self.X_fit_.shape and np.array_equal(
-            X_checked, self.X_fit_
-        ):
+        same_input = False
+        if X_checked.shape == self.X_fit_.shape:
+            if hasattr(X_checked, "tocsr") or hasattr(self.X_fit_, "tocsr"):
+                left = csr_matrix(X_checked).copy()
+                right = csr_matrix(self.X_fit_).copy()
+                left.sum_duplicates()
+                right.sum_duplicates()
+                left.eliminate_zeros()
+                right.eliminate_zeros()
+                same_input = (left != right).nnz == 0
+            else:
+                same_input = np.array_equal(X_checked, self.X_fit_)
+        if same_input:
             return self.embedding_.copy()
         raise ValueError(
             "transform is available only for the original training rows in the "

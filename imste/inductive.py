@@ -9,6 +9,7 @@ import torch
 from torch import nn
 from sklearn.base import BaseEstimator, TransformerMixin, clone
 from sklearn.utils.validation import check_array, check_is_fitted
+from scipy.sparse import issparse
 
 from ._estimator import (
     IteratedMinimumSpanningTreeEmbedder,
@@ -41,6 +42,14 @@ class _MLPProjector(nn.Module):
 
     def forward(self, inputs: torch.Tensor) -> torch.Tensor:
         return self.layers(inputs)
+
+
+def _scaled_feature_rows(X, indices, mean, scale) -> np.ndarray:
+    """Densify only the requested CSR batch for the dense projection MLP."""
+    rows = X[indices]
+    if issparse(rows):
+        rows = rows.toarray()
+    return np.asarray((rows - mean) / scale, dtype=np.float32)
 
 
 class InductiveIMSTE(TransformerMixin, BaseEstimator):
@@ -146,29 +155,36 @@ class InductiveIMSTE(TransformerMixin, BaseEstimator):
 
         X_training = X_checked[training_indices]
         target_training = self.reference_embedding_[training_indices]
-        self.X_mean_ = X_training.mean(axis=0)
-        self.X_scale_ = X_training.std(axis=0)
+        if issparse(X_training):
+            self.X_mean_ = np.asarray(X_training.mean(axis=0)).ravel()
+            second_moment = np.asarray(
+                X_training.multiply(X_training).mean(axis=0)
+            ).ravel()
+            self.X_scale_ = np.sqrt(
+                np.maximum(second_moment - self.X_mean_**2, 0.0)
+            )
+        else:
+            self.X_mean_ = X_training.mean(axis=0)
+            self.X_scale_ = X_training.std(axis=0)
         self.X_scale_[self.X_scale_ == 0.0] = 1.0
         self.target_mean_ = target_training.mean(axis=0)
         self.target_scale_ = target_training.std(axis=0)
         self.target_scale_[self.target_scale_ == 0.0] = 1.0
 
-        X_scaled = np.asarray(
-            (X_checked - self.X_mean_) / self.X_scale_, dtype=np.float32
-        )
         targets_scaled = np.asarray(
             (self.reference_embedding_ - self.target_mean_) / self.target_scale_,
             dtype=np.float32,
         )
         device = torch.device(self.embedder_.device_)
-        X_tensor = torch.as_tensor(X_scaled, device=device)
+        sparse_input = issparse(X_checked)
+        if sparse_input:
+            X_tensor = None
+        else:
+            X_scaled = np.asarray(
+                (X_checked - self.X_mean_) / self.X_scale_, dtype=np.float32
+            )
+            X_tensor = torch.as_tensor(X_scaled, device=device)
         targets_tensor = torch.as_tensor(targets_scaled, device=device)
-        training_indices_tensor = torch.as_tensor(
-            training_indices, dtype=torch.long, device=device
-        )
-        validation_indices_tensor = torch.as_tensor(
-            validation_indices, dtype=torch.long, device=device
-        )
         seed = int(rng.randint(0, np.iinfo(np.int32).max))
 
         projection_started = time.perf_counter()
@@ -191,12 +207,21 @@ class InductiveIMSTE(TransformerMixin, BaseEstimator):
                 order = rng.permutation(training_indices)
                 for start in range(0, len(order), batch_size):
                     batch = order[start : start + batch_size]
-                    batch_tensor = torch.as_tensor(
+                    target_batch = torch.as_tensor(
                         batch, dtype=torch.long, device=device
                     )
-                    prediction = self.projector_(X_tensor[batch_tensor])
+                    if sparse_input:
+                        input_batch = torch.as_tensor(
+                            _scaled_feature_rows(
+                                X_checked, batch, self.X_mean_, self.X_scale_
+                            ),
+                            device=device,
+                        )
+                    else:
+                        input_batch = X_tensor[target_batch]
+                    prediction = self.projector_(input_batch)
                     loss = torch.mean(
-                        (prediction - targets_tensor[batch_tensor]) ** 2
+                        (prediction - targets_tensor[target_batch]) ** 2
                     )
                     optimizer.zero_grad(set_to_none=True)
                     loss.backward()
@@ -204,18 +229,48 @@ class InductiveIMSTE(TransformerMixin, BaseEstimator):
 
                 self.projector_.eval()
                 with torch.no_grad():
-                    validation_prediction = self.projector_(
-                        X_tensor[validation_indices_tensor]
-                    )
-                    validation_loss = float(
-                        torch.mean(
-                            (
-                                validation_prediction
-                                - targets_tensor[validation_indices_tensor]
+                    if sparse_input:
+                        validation_error = 0.0
+                        validation_count = 0
+                        for start in range(0, len(validation_indices), batch_size):
+                            batch = validation_indices[start : start + batch_size]
+                            target_batch = torch.as_tensor(
+                                batch, dtype=torch.long, device=device
                             )
-                            ** 2
-                        ).cpu()
-                    )
+                            input_batch = torch.as_tensor(
+                                _scaled_feature_rows(
+                                    X_checked, batch, self.X_mean_, self.X_scale_
+                                ),
+                                device=device,
+                            )
+                            error = torch.sum(
+                                (
+                                    self.projector_(input_batch)
+                                    - targets_tensor[target_batch]
+                                )
+                                ** 2
+                            )
+                            validation_error += float(error.cpu())
+                            validation_count += (
+                                len(batch) * self.reference_embedding_.shape[1]
+                            )
+                        validation_loss = validation_error / validation_count
+                    else:
+                        validation_tensor = torch.as_tensor(
+                            validation_indices, dtype=torch.long, device=device
+                        )
+                        validation_prediction = self.projector_(
+                            X_tensor[validation_tensor]
+                        )
+                        validation_loss = float(
+                            torch.mean(
+                                (
+                                    validation_prediction
+                                    - targets_tensor[validation_tensor]
+                                )
+                                ** 2
+                            ).cpu()
+                        )
                 self.projector_.train()
                 if not np.isfinite(validation_loss):
                     raise ValueError(
@@ -242,16 +297,44 @@ class InductiveIMSTE(TransformerMixin, BaseEstimator):
             self.projector_.load_state_dict(best_state)
             self.projector_.eval()
             with torch.no_grad():
-                training_prediction = self.projector_(
-                    X_tensor[training_indices_tensor]
-                )
-                training_loss = torch.mean(
-                    (
-                        training_prediction
-                        - targets_tensor[training_indices_tensor]
+                if sparse_input:
+                    training_error = 0.0
+                    training_count = 0
+                    for start in range(0, len(training_indices), batch_size):
+                        batch = training_indices[start : start + batch_size]
+                        target_batch = torch.as_tensor(
+                            batch, dtype=torch.long, device=device
+                        )
+                        input_batch = torch.as_tensor(
+                            _scaled_feature_rows(
+                                X_checked, batch, self.X_mean_, self.X_scale_
+                            ),
+                            device=device,
+                        )
+                        error = torch.sum(
+                            (
+                                self.projector_(input_batch)
+                                - targets_tensor[target_batch]
+                            )
+                            ** 2
+                        )
+                        training_error += float(error.cpu())
+                        training_count += (
+                            len(batch) * self.reference_embedding_.shape[1]
+                        )
+                    training_loss = torch.tensor(training_error / training_count)
+                else:
+                    training_tensor = torch.as_tensor(
+                        training_indices, dtype=torch.long, device=device
                     )
-                    ** 2
-                )
+                    training_prediction = self.projector_(X_tensor[training_tensor])
+                    training_loss = torch.mean(
+                        (
+                            training_prediction
+                            - targets_tensor[training_tensor]
+                        )
+                        ** 2
+                    )
 
         if device.type == "mps":
             torch.mps.synchronize()
@@ -266,21 +349,36 @@ class InductiveIMSTE(TransformerMixin, BaseEstimator):
         """Project rows with the learned MLP, including the training rows."""
         check_is_fitted(self, attributes=["projector_", "reference_embedding_"])
         self.embedder_._check_feature_names(X)
-        X_checked = check_array(X, dtype=np.float64, ensure_2d=True)
+        X_checked = check_array(
+            X, dtype=np.float64, ensure_2d=True, accept_sparse="csr"
+        )
         if X_checked.shape[1] != self.n_features_in_:
             raise ValueError(
                 f"X has {X_checked.shape[1]} features, but this estimator was fitted "
                 f"with {self.n_features_in_} features."
             )
-        X_scaled = np.asarray((X_checked - self.X_mean_) / self.X_scale_, dtype=np.float32)
         device = torch.device(self.embedder_.device_)
         predictions: list[np.ndarray] = []
         self.projector_.eval()
+        if issparse(X_checked):
+            X_scaled = None
+        else:
+            X_scaled = np.asarray(
+                (X_checked - self.X_mean_) / self.X_scale_, dtype=np.float32
+            )
         with torch.no_grad():
-            for start in range(0, len(X_scaled), self.batch_size):
-                batch = torch.as_tensor(
-                    X_scaled[start : start + self.batch_size], device=device
-                )
+            for start in range(0, X_checked.shape[0], self.batch_size):
+                stop = min(start + self.batch_size, X_checked.shape[0])
+                if X_scaled is None:
+                    batch_features = _scaled_feature_rows(
+                        X_checked,
+                        slice(start, stop),
+                        self.X_mean_,
+                        self.X_scale_,
+                    )
+                else:
+                    batch_features = X_scaled[start:stop]
+                batch = torch.as_tensor(batch_features, device=device)
                 predictions.append(self.projector_(batch).cpu().numpy())
         standardized = np.concatenate(predictions, axis=0).astype(np.float64)
         return standardized * self.target_scale_ + self.target_mean_
