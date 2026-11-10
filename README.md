@@ -39,8 +39,11 @@ Edges are treated as undirected, and reciprocal entries use the smaller
 distance. Disconnected components remain separate spanning forests. Each
 iteration prefers unused edges; when needed, it reuses short edges and
 increments their rank. The optimizer uses the usual inverse-rank attraction
-weights. Since this path has no feature vectors, it uses random initialization
-and exposes the result through `embedding_` rather than `transform()`.
+weights. Optionally pass `init_features` with one feature row per graph node to
+seed the coordinates from standardized PCA scores. These features affect only
+initialization; the supplied graph remains the optimizer's objective. Without
+`init_features`, seeded random initialization is used. This path exposes the
+result through `embedding_` rather than `transform()`.
 
 ## Quick start
 
@@ -74,7 +77,7 @@ print(embedding.shape)  # (500, 2)
 from imste import IteratedMinimumSpanningTreeEmbedder
 
 mapper = IteratedMinimumSpanningTreeEmbedder(n_msts=10, n_epochs=300)
-mapper.fit_graph(distance_graph)  # square SciPy sparse matrix
+mapper.fit_graph(distance_graph, init_features=X)  # PCA-seed from X
 embedding = mapper.embedding_
 ```
 
@@ -269,8 +272,8 @@ By default, `fit(X)` starts coordinate optimization from PCA scores computed
 after feature-wise standardization, multiplied by `pca_init_scale`. The default
 scale is `0.1`; PCA scores are not restricted to the range `[-1, 1]`. Set
 `pca_init=False` to use the seeded random initialization instead.
-`fit_graph()` always uses random initialization because it receives distances
-rather than feature vectors.
+`fit_graph()` uses the same PCA initialization when `init_features` is supplied;
+otherwise it uses random initialization.
 
 The selected device is available as `mapper.device_` after fitting.
 `device="auto"` keeps graph construction and optimization on CPU. With

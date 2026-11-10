@@ -230,11 +230,12 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
         Number of embedding coordinates per sample.
     pca_init : bool, default=True
         Initialize ``fit(X)`` coordinates from PCA on standardized features.
-        Extra coordinates beyond the available PCA dimensions are zero. The
-        existing random initialization is used when false and for ``fit_graph``.
+        ``fit_graph`` also uses PCA when ``init_features`` is supplied. Extra
+        coordinates beyond the available PCA dimensions are zero. The existing
+        random initialization is used when false or when graph features are absent.
     pca_init_scale : float, default=0.1
         Multiply PCA initialization coordinates by this finite, non-negative
-        scale. It does not affect random initialization or ``fit_graph``.
+        scale. It does not affect random initialization.
     n_epochs : int, default=200
         Number of optimization epochs.
     batch_size : int, default=32768
@@ -414,20 +415,22 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
         schedule_by_rank: bool,
         X_checked: object | None = None,
         X_original: object | None = None,
+        initialization_features: object | None = None,
         **options,
     ) -> "IteratedMinimumSpanningTreeEmbedder":
         """Optimize coordinates from a graph and attach fitted diagnostics.
 
         ``X_checked`` distinguishes feature-based fits from ``fit_graph``.
-        Only feature-based fits can initialize from PCA; both paths share the
-        same optimizer and graph metadata setup.
+        Either a feature-based fit or explicit ``initialization_features`` can
+        provide the standardized PCA initialization.
         """
         embedding_started = time.perf_counter()
         rng = np.random.RandomState(self.random_state)
         seed = int(rng.randint(0, np.iinfo(np.int32).max))
-        if X_checked is not None and options["pca_init"]:
+        pca_features = X_checked if initialization_features is None else initialization_features
+        if pca_features is not None and options["pca_init"]:
             coordinates = _standardized_pca_initialization(
-                X_checked, n_components, self.random_state
+                pca_features, n_components, self.random_state
             )
             coordinates = (coordinates * options["pca_init_scale"]).astype(
                 np.float32
@@ -546,6 +549,7 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
             schedule_by_rank=self.mst_method != "prim",
             X_checked=X_checked,
             X_original=X,
+            initialization_features=X_checked,
             **{
                 name: value
                 for name, value in options.items()
@@ -554,7 +558,10 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
         )
 
     def fit_graph(
-        self, distance_graph: sparse.spmatrix
+        self,
+        distance_graph: sparse.spmatrix,
+        *,
+        init_features: object | None = None,
     ) -> "IteratedMinimumSpanningTreeEmbedder":
         """Fit directly from a sparse graph whose stored values are distances.
 
@@ -566,9 +573,13 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
         short edges when necessary and increase their ranks, which reduces
         their attraction weights.
 
-        This input has no feature vectors, so coordinates use the seeded random
-        initialization even when ``pca_init=True``. The fitted coordinates are
-        available as ``embedding_``; feature-based ``transform`` is unavailable.
+        ``init_features`` optionally supplies the sample-by-feature matrix used
+        for standardized PCA initialization. Its rows must match the graph's
+        rows in the same order. The supplied features initialize coordinates
+        only; graph edges still determine the optimization objective. Without
+        features, the seeded random initialization is used. The fitted
+        coordinates are available as ``embedding_``; feature-based ``transform``
+        is unavailable after ``fit_graph``.
         """
         fit_started = time.perf_counter()
         options = self._validated_fit_options()
@@ -578,6 +589,18 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
             raise ValueError("distance_graph must be square.")
         if distance_graph.shape[0] < 2:
             raise ValueError("distance_graph must contain at least two samples.")
+
+        initialization_features = None
+        if init_features is not None:
+            initialization_features = check_array(
+                init_features, dtype=np.float64, ensure_2d=True, accept_sparse="csr"
+            )
+            if issparse(initialization_features):
+                initialization_features = csr_matrix(initialization_features)
+            if initialization_features.shape[0] != distance_graph.shape[0]:
+                raise ValueError(
+                    "init_features must have one row per distance_graph node."
+                )
 
         graph_started = time.perf_counter()
         edges, tree_ranks = iterated_graph_edges(
@@ -596,6 +619,7 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
             fit_started=fit_started,
             resolved_device=options["resolved_device"],
             schedule_by_rank=True,
+            initialization_features=initialization_features,
             **{
                 name: value
                 for name, value in options.items()
