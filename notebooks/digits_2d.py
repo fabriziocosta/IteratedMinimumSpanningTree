@@ -89,7 +89,7 @@ def display_interactive_embedding(
     Dataset choices load lazily and cache balanced sample pools with separate,
     disjoint training and novel rows. Controls configure sample count, MST
     count, MST builder, epoch count, logistic-loss settings, and
-    negative sampling.
+    negative sampling, plus PCA initialization and its coordinate scale.
     The estimator menu selects transductive IMSTE or its inductive MLP
     extension. Attraction uses fixed weight-sum normalization. Fits use the
     selected epoch count and a 0.05 learning rate. Fitting starts when the
@@ -132,7 +132,8 @@ def display_interactive_embedding(
         f"Default selection: {initial_sample_count:,} samples, 15 MSTs with "
         "approximate FAMST, "
         "squared distance, log attraction, logistic repulsion, "
-        "weight_sum normalization, and 200 epochs. "
+        "weight_sum normalization, PCA initialization at scale 0.10, and "
+        "200 epochs. "
         "Click Fit embedding to run."
     )
 
@@ -169,6 +170,21 @@ def display_interactive_embedding(
         max=64,
         step=1,
         description="MSTs",
+        continuous_update=False,
+        style={"description_width": "initial"},
+    )
+    pca_init = widgets.Checkbox(
+        value=True,
+        description="PCA initialization",
+        indent=False,
+    )
+    pca_init_scale = widgets.FloatSlider(
+        value=0.1,
+        min=0.0,
+        max=1.0,
+        step=0.01,
+        readout_format=".2f",
+        description="PCA init scale",
         continuous_update=False,
         style={"description_width": "initial"},
     )
@@ -271,6 +287,10 @@ def display_interactive_embedding(
         style={"description_width": "initial"},
     )
     batch_size.layout.display = "none"
+    pca_init_scale.disabled = not pca_init.value
+
+    def update_pca_scale_availability(change) -> None:
+        pca_init_scale.disabled = not change["new"]
 
     def update_batch_size_visibility(change) -> None:
         batch_size.layout.display = "" if change["new"] == "mps" else "none"
@@ -457,6 +477,8 @@ def display_interactive_embedding(
         dataset.value = "mnist"
         sample_count.value = min(1000, sample_count.max)
         n_msts.value = 15
+        pca_init.value = True
+        pca_init_scale.value = 0.1
         mst_method.value = "famst"
         mst_max_neighbors.value = 120
         lambda_rep.value = 0.5
@@ -532,6 +554,8 @@ def display_interactive_embedding(
                     lambda_rep=lambda_rep.value,
                     logistic_margin=logistic_margin.value,
                     logistic_temperature=logistic_temperature.value,
+                    pca_init=pca_init.value,
+                    pca_init_scale=pca_init_scale.value,
                     random_state=random_state,
                     device=device.value,
                     progress_callback=report_progress,
@@ -589,6 +613,11 @@ def display_interactive_embedding(
                     f" · logistic m={logistic_margin.value:.1f}, "
                     f"τ={logistic_temperature.value:.2f}"
                 )
+                initialization_title = (
+                    f"PCA ×{pca_init_scale.value:.2f}"
+                    if pca_init.value
+                    else "random initialization"
+                )
 
                 fig, ax = plt.subplots(figsize=(8, 6))
                 points = ax.scatter(
@@ -610,7 +639,7 @@ def display_interactive_embedding(
                         f"{n_msts.value} MSTs · rank-scheduled updates · "
                         f"{mst_method.value.upper()} · "
                         "squared distance · log attraction · "
-                        "logistic repulsion · weight_sum · "
+                        f"logistic repulsion · weight_sum · {initialization_title} · "
                         f"{epochs:,} epochs{logistic_title}{knn_title}"
                     ),
                     xlabel="Embedding dimension 1",
@@ -666,6 +695,7 @@ def display_interactive_embedding(
     dataset.observe(select_dataset, names="value")
     embedding_type.observe(update_estimator_controls, names="value")
     device.observe(update_batch_size_visibility, names="value")
+    pca_init.observe(update_pca_scale_availability, names="value")
     fit_button.on_click(fit_and_display)
     reset_button.on_click(reset_sliders)
     mlp_button.on_click(show_mlp_predictions)
@@ -674,6 +704,7 @@ def display_interactive_embedding(
         [
             widgets.HBox([dataset]),
             widgets.HBox([sample_count, n_msts]),
+            widgets.HBox([pca_init, pca_init_scale]),
             widgets.HBox([mst_method]),
             widgets.HBox([mst_max_neighbors]),
             widgets.HBox([n_epochs]),
@@ -711,6 +742,8 @@ def display_interactive_embedding(
             "n_epochs": n_epochs,
             "batch_size": batch_size,
             "n_msts": n_msts,
+            "pca_init": pca_init,
+            "pca_init_scale": pca_init_scale,
             "mst_method": mst_method,
             "mst_max_neighbors": mst_max_neighbors,
             "lambda_rep": lambda_rep,
