@@ -30,6 +30,14 @@ the package. MPS uses exact chunked nearest-neighbor search for dense FAMST
 inputs; CSR inputs use PyNNDescent on CPU for graph construction. To use only
 the exact Prim builder, select `mst_method="prim"`.
 
+For an existing sparse graph whose stored values are distances, use
+`fit_graph()` instead of passing the matrix to `fit()` (which treats rows as
+feature vectors). `fit_graph()` considers only stored edges, treats a
+one-direction edge as undirected, uses the smaller distance for reciprocal
+edges, and preserves disconnected components as separate spanning forests.
+The edge distances select the tree edges; the optimizer then uses IMSTE's
+usual inverse-rank attraction weights.
+
 ## Quick start
 
 IMSTE uses Euclidean distances to build its graph. Scale features first when
@@ -56,6 +64,14 @@ mapper = IteratedMinimumSpanningTreeEmbedder(
 embedding = mapper.fit_transform(X)
 
 print(embedding.shape)  # (500, 2)
+```
+
+```python
+from imste import IteratedMinimumSpanningTreeEmbedder
+
+mapper = IteratedMinimumSpanningTreeEmbedder(n_msts=10, n_epochs=300)
+mapper.fit_graph(distance_graph)  # square SciPy sparse matrix
+embedding = mapper.embedding_
 ```
 
 For larger datasets, FAMST is the default sparse approximate builder. To use
@@ -227,6 +243,7 @@ Raw coordinate arrays remain supported.
 | --- | ---: | --- |
 | `n_msts` | `15` | Number of spanning-tree iterations; bottleneck edge reuse is penalized by incrementing its rank |
 | `n_components` | `2` | Embedding dimensions |
+| `pca_init` | `True` | Initialize `fit(X)` with PCA on feature-wise standardized inputs; extra PCA dimensions are zero-filled |
 | `n_epochs` | `200` | Coordinate-optimization epochs |
 | `batch_size` | `32768` | Maximum active edges per MPS update batch; ignored by CPU optimizer |
 | `learning_rate` | `0.05` | Coordinate optimizer learning rate |
@@ -242,6 +259,12 @@ Raw coordinate arrays remain supported.
 | `mst_inter_component_edges` | `5` | Candidate connections per FAMST component pair |
 | `mst_representatives_per_component` | `10` | Maximum representatives per component for selecting FAMST bridge pairs |
 | `mst_max_neighbors` | `None` | FAMST neighbor cap; defaults to four times `mst_neighbors` |
+
+By default, `fit(X)` starts coordinate optimization from PCA scores computed
+after feature-wise standardization. These scores are not restricted to the
+range `[-1, 1]`. Set `pca_init=False` to use the seeded random initialization
+instead. `fit_graph()` always uses random initialization because it receives
+distances rather than feature vectors.
 
 The selected device is available as `mapper.device_` after fitting.
 `device="auto"` keeps graph construction and optimization on CPU. With

@@ -3,12 +3,14 @@ import pytest
 import torch
 from sklearn.base import clone
 from scipy.spatial.distance import cdist
+from scipy import sparse
 
 from imste import IteratedMinimumSpanningTreeEmbedder
 from imste.inductive import InductiveIMSTE
 from imste._estimator import (
     _iterated_mst_edges,
     _sample_negative_targets,
+    _standardized_pca_initialization,
 )
 
 
@@ -74,6 +76,88 @@ def test_seed_reproduces_embedding():
     first = IteratedMinimumSpanningTreeEmbedder(**params).fit_transform(X)
     second = IteratedMinimumSpanningTreeEmbedder(**params).fit_transform(X)
     np.testing.assert_array_equal(first, second)
+
+
+def test_default_pca_initialization_matches_standardized_dense_pca():
+    X = np.array(
+        [[0.0, 3.0, 4.0], [1.0, 1.0, 2.0], [2.0, 0.0, 1.0], [4.0, 2.0, 0.0]]
+    )
+    estimator = IteratedMinimumSpanningTreeEmbedder(
+        n_msts=1, n_epochs=0, mst_method="prim", random_state=12
+    ).fit(X)
+
+    from sklearn.decomposition import PCA
+
+    standardized = (X - X.mean(axis=0)) / X.std(axis=0)
+    expected = PCA(n_components=2, svd_solver="full").fit_transform(standardized)
+    np.testing.assert_allclose(estimator.embedding_, expected, atol=1e-6)
+    np.testing.assert_array_equal(
+        estimator.embedding_,
+        IteratedMinimumSpanningTreeEmbedder(
+            n_msts=1, n_epochs=0, mst_method="prim", random_state=12
+        ).fit(X).embedding_,
+    )
+
+
+def test_pca_initialization_keeps_csr_input_sparse(monkeypatch):
+    X = np.random.RandomState(8).normal(size=(9, 5))
+    X[np.abs(X) < 0.8] = 0.0
+    X_csr = sparse.csr_matrix(X)
+
+    def fail_densify(*args, **kwargs):
+        raise AssertionError("PCA initialization must not densify CSR input")
+
+    monkeypatch.setattr(sparse.csr_matrix, "toarray", fail_densify)
+    sparse_scores = _standardized_pca_initialization(X_csr, 3, random_state=17)
+    dense_scores = _standardized_pca_initialization(X, 3, random_state=17)
+
+    assert np.isfinite(sparse_scores).all()
+    np.testing.assert_allclose(np.abs(sparse_scores), np.abs(dense_scores), atol=1e-6)
+
+
+def test_pca_initialization_zero_fills_extra_dimensions_and_constant_features():
+    X = np.array([[0.0, 2.0, 5.0], [1.0, 4.0, 5.0], [2.0, 6.0, 5.0]])
+    scores = _standardized_pca_initialization(X, 5, random_state=0)
+
+    assert scores.shape == (3, 5)
+    assert np.isfinite(scores).all()
+    np.testing.assert_array_equal(scores[:, 3:], 0.0)
+
+
+def test_pca_init_false_preserves_seeded_random_initialization():
+    seed = 23
+    estimator = IteratedMinimumSpanningTreeEmbedder(
+        n_msts=1,
+        n_epochs=0,
+        mst_method="prim",
+        random_state=seed,
+        pca_init=False,
+    ).fit(small_data())
+    rng = np.random.RandomState(seed)
+    rng.randint(0, np.iinfo(np.int32).max)
+    expected = (rng.standard_normal((len(small_data()), 2)) * 1e-3).astype(np.float32)
+
+    np.testing.assert_array_equal(estimator.embedding_, expected)
+
+
+def test_fit_graph_uses_random_initialization_with_default_pca_option():
+    graph = sparse.csr_matrix([[0.0, 1.0], [1.0, 0.0]])
+    seed = 31
+    estimator = IteratedMinimumSpanningTreeEmbedder(
+        n_msts=1, n_epochs=0, random_state=seed
+    ).fit_graph(graph)
+    rng = np.random.RandomState(seed)
+    rng.randint(0, np.iinfo(np.int32).max)
+    expected = (rng.standard_normal((2, 2)) * 1e-3).astype(np.float32)
+
+    assert estimator.pca_init is True
+    assert clone(estimator).pca_init is True
+    np.testing.assert_array_equal(estimator.embedding_, expected)
+
+
+def test_pca_init_requires_boolean():
+    with pytest.raises(ValueError, match="pca_init must be a boolean"):
+        IteratedMinimumSpanningTreeEmbedder(pca_init="yes").fit(small_data())
 
 
 def test_transform_rejects_new_or_reordered_rows():
@@ -170,10 +254,102 @@ def test_duplicate_samples_keep_zero_distance_mst_edges():
     assert np.isfinite(estimator.embedding_).all()
 
 
-def test_insufficient_edge_disjoint_msts_raise_clear_error():
+def test_fit_graph_uses_only_minimum_distance_spanning_edges():
+    graph = sparse.csr_matrix(
+        np.array(
+            [
+                [0.0, 1.0, 9.0, 0.0],
+                [1.0, 0.0, 2.0, 0.0],
+                [9.0, 2.0, 0.0, 0.0],
+                [0.0, 0.0, 0.0, 0.0],
+            ]
+        )
+    )
+    estimator = IteratedMinimumSpanningTreeEmbedder(
+        n_msts=1, n_epochs=0, random_state=2
+    ).fit_graph(graph)
+
+    assert estimator.graph_edges_.tolist() == [[0, 1], [1, 2]]
+    assert estimator.graph_ranks_.tolist() == [1, 1]
+    assert estimator.embedding_.shape == (4, 2)
+    assert estimator.graph_input_ is True
+    assert np.isfinite(estimator.embedding_).all()
+
+
+def test_fit_graph_reuses_edges_and_preserves_disconnected_components():
+    graph = sparse.csr_matrix(
+        np.array(
+            [
+                [0.0, 1.0, 0.0, 0.0, 0.0, 0.0],
+                [1.0, 0.0, 2.0, 0.0, 0.0, 0.0],
+                [0.0, 2.0, 0.0, 0.0, 0.0, 0.0],
+                [0.0, 0.0, 0.0, 0.0, 3.0, 0.0],
+                [0.0, 0.0, 0.0, 3.0, 0.0, 0.0],
+                [0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            ]
+        )
+    )
+    estimator = IteratedMinimumSpanningTreeEmbedder(
+        n_msts=2, n_epochs=0, random_state=2
+    ).fit_graph(graph)
+
+    assert estimator.graph_edges_.shape == (6, 2)
+    assert estimator.graph_ranks_.tolist() == [1, 1, 1, 2, 2, 2]
+    assert np.all(estimator.graph_edges_[:, 0] // 3 == estimator.graph_edges_[:, 1] // 3)
+    assert estimator.embedding_.shape == (6, 2)
+
+
+def test_fit_graph_uses_minimum_reciprocal_distance_and_one_way_edges():
+    graph = sparse.coo_matrix(
+        (
+            np.array([4.0, 1.0, 2.0, 1.5]),
+            (np.array([0, 1, 1, 0]), np.array([1, 0, 2, 2])),
+        ),
+        shape=(3, 3),
+    )
+    estimator = IteratedMinimumSpanningTreeEmbedder(
+        n_msts=1, n_epochs=0, random_state=2
+    ).fit_graph(graph)
+
+    assert estimator.graph_edges_.tolist() == [[0, 1], [0, 2]]
+
+
+def test_fit_graph_keeps_explicit_zero_distance_edges():
+    graph = sparse.coo_matrix(
+        (np.array([0.0, 0.0, 2.0, 2.0]),
+         (np.array([0, 1, 1, 2]), np.array([1, 0, 2, 1]))),
+        shape=(3, 3),
+    )
+    estimator = IteratedMinimumSpanningTreeEmbedder(
+        n_msts=1, n_epochs=0
+    ).fit_graph(graph)
+
+    assert estimator.graph_edges_.tolist() == [[0, 1], [1, 2]]
+
+
+@pytest.mark.parametrize(
+    ("graph", "message"),
+    [
+        (np.eye(3), "SciPy sparse"),
+        (sparse.csr_matrix((2, 3)), "square"),
+        (sparse.csr_matrix([[0.0, -1.0], [-1.0, 0.0]]), "non-negative"),
+        (sparse.csr_matrix([[0.0, np.nan], [np.nan, 0.0]]), "finite"),
+        (sparse.csr_matrix((3, 3)), "off-diagonal edge"),
+    ],
+)
+def test_fit_graph_rejects_invalid_graphs(graph, message):
+    with pytest.raises(ValueError, match=message):
+        IteratedMinimumSpanningTreeEmbedder(n_epochs=0).fit_graph(graph)
+
+
+def test_famst_reuses_a_bottleneck_edge_when_more_trees_are_requested():
     X = np.array([[0.0], [1.0]])
-    with pytest.raises(ValueError, match="Reduce n_msts"):
-        IteratedMinimumSpanningTreeEmbedder(n_msts=2, n_epochs=0).fit(X)
+    estimator = IteratedMinimumSpanningTreeEmbedder(
+        n_msts=2, n_epochs=0, random_state=3
+    ).fit(X)
+
+    assert estimator.graph_edges_.tolist() == [[0, 1], [0, 1]]
+    assert estimator.graph_ranks_.tolist() == [1, 2]
 
 
 def test_no_eligible_negative_pairs_is_supported():

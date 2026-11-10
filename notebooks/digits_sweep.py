@@ -40,7 +40,7 @@ def load_mnist_data(sample_size=2000, random_state=42):
             raise ValueError("sample_size must be at least 10, or None for all MNIST rows.")
 
     mnist = fetch_openml(
-        "mnist_784", version=1, as_frame=False, parser="auto", cache=True
+        "mnist_784", version=1, as_frame=False, parser="liac-arff", cache=True
     )
     X = np.asarray(mnist.data, dtype=np.float32)
     labels = np.asarray(mnist.target, dtype=np.int64)

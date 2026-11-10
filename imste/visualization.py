@@ -426,6 +426,7 @@ def interactive_force(
     max_k: int = 50,
     max_iterations: int = 200,
     point_size: float = 6,
+    label_colors: dict | None = None,
 ):
     """Show an interactive label-guided adjustment of a 2D embedding.
 
@@ -503,6 +504,12 @@ def interactive_force(
         global_scale = max(float(np.ptp(coordinates, axis=0).mean()), 1e-8)
     step_limit = 0.025 * global_scale
     repulsion_radius = 0.08 * global_scale
+    coordinate_min = coordinates.min(axis=0)
+    coordinate_max = coordinates.max(axis=0)
+    coordinate_span = coordinate_max - coordinate_min
+    viewport_padding = np.maximum(coordinate_span * 0.05, 0.08 * global_scale)
+    viewport_min = coordinate_min - viewport_padding
+    viewport_max = coordinate_max + viewport_padding
 
     default_k = min(max(1, int(initial_k)), max_k)
     default_iterations = min(max(0, int(initial_iterations)), int(max_iterations))
@@ -670,12 +677,15 @@ def interactive_force(
     ):
         adjusted = adjusted_coordinates(k, iterations, balance, distance_fraction)
         shown = coordinates + float(movement) * (adjusted - coordinates)
-        median_shift = float(
-            np.median(np.linalg.norm(shown - coordinates, axis=1))
-        )
         palette = plt.get_cmap("tab20", max(len(labels.categories), 1))
-        point_colors = palette(np.clip(label_codes, 0, max(len(labels.categories) - 1, 0)))
-        point_colors[label_codes < 0] = (0.5, 0.5, 0.5, 1.0)
+        category_colors = [
+            (label_colors or {}).get(str(label), palette(index))
+            for index, label in enumerate(labels.categories)
+        ]
+        point_colors = np.asarray([
+            category_colors[code] if code >= 0 else (0.5, 0.5, 0.5, 1.0)
+            for code in label_codes
+        ])
         fig, ax = plt.subplots(figsize=(8, 7))
         ax.scatter(
             shown[:, 0],
@@ -685,17 +695,13 @@ def interactive_force(
             alpha=0.65,
             linewidths=0,
         )
-        ax.set_title(
-            f"Label-guided embedding: k={k}, {iterations} iterations, "
-            f"balance={balance:.2f}, same-label rest distance="
-            f"{distance_fraction:.2f}× original, movement={movement:.2f}, "
-            f"median shift={median_shift:.3g}"
-        )
         ax.set_xlabel("IMSTE 1")
         ax.set_ylabel("IMSTE 2")
-        ax.set_aspect("equal", adjustable="datalim")
+        ax.set_xlim(viewport_min[0], viewport_max[0])
+        ax.set_ylim(viewport_min[1], viewport_max[1])
+        ax.set_aspect("equal", adjustable="box")
         legend_handles = [
-            Patch(facecolor=palette(index), edgecolor="none", label=str(label))
+            Patch(facecolor=category_colors[index], edgecolor="none", label=str(label))
             for index, label in enumerate(labels.categories)
         ]
         if np.any(label_codes < 0):

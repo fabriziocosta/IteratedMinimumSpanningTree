@@ -48,7 +48,7 @@ def _load_openml(name: str) -> tuple[np.ndarray, np.ndarray]:
         name,
         version=1,
         as_frame=False,
-        parser="auto",
+        parser="liac-arff",
         cache=True,
     )
     labels = np.unique(dataset.target, return_inverse=True)[1]

@@ -7,12 +7,14 @@ import time
 from collections.abc import Callable
 
 import numpy as np
+from scipy import sparse
 from scipy.sparse import csr_matrix, issparse
 from sklearn.base import BaseEstimator, TransformerMixin
+from sklearn.decomposition import PCA
 from sklearn.utils.validation import check_array, check_is_fitted
 
 from ._optimizer import optimize_embedding
-from .mst import build_mst_edges
+from .mst import build_mst_edges, iterated_graph_edges
 from .mst.prim import iterated_prim_distance_edges as _iterated_mst_edges
 
 
@@ -35,6 +37,87 @@ def _finite_nonnegative(name: str, value: object, *, strictly_positive: bool = F
         qualifier = "positive" if strictly_positive else "non-negative"
         raise ValueError(f"{name} must be a finite {qualifier} number.")
     return result
+
+
+def _standardized_pca_initialization(
+    X: np.ndarray | csr_matrix,
+    n_components: int,
+    random_state: int | None,
+) -> np.ndarray:
+    """Return PCA scores after feature-wise standardization.
+
+    Sparse inputs stay sparse: centering is represented as a linear operator
+    around a scaled CSR matrix rather than materializing a dense copy.
+    """
+    n_samples, n_features = X.shape
+    available_components = min(n_components, n_samples, n_features)
+    scores = np.zeros((n_samples, n_components), dtype=np.float64)
+    if available_components == 0:
+        return scores
+
+    if issparse(X):
+        X = csr_matrix(X, dtype=np.float64)
+        mean = np.asarray(X.mean(axis=0)).ravel()
+        second_moment = np.asarray(X.power(2).mean(axis=0)).ravel()
+        scale = np.sqrt(np.maximum(second_moment - mean**2, 0.0))
+        scale[scale == 0.0] = 1.0
+        scaled = X.multiply(1.0 / scale).tocsr()
+        scaled_mean = mean / scale
+
+        from scipy.sparse.linalg import LinearOperator, svds
+
+        def matvec(vector):
+            return np.asarray(scaled @ vector).ravel() - scaled_mean @ vector
+
+        def rmatvec(vector):
+            return np.asarray(scaled.T @ vector).ravel() - scaled_mean * np.sum(vector)
+
+        def matmat(matrix):
+            return np.asarray(scaled @ matrix) - np.ones((n_samples, 1)) * (
+                scaled_mean @ matrix
+            )[None, :]
+
+        def rmatmat(matrix):
+            return np.asarray(scaled.T @ matrix) - scaled_mean[:, None] * np.sum(
+                matrix, axis=0
+            )[None, :]
+
+        centered_standardized = LinearOperator(
+            shape=(n_samples, n_features),
+            matvec=matvec,
+            rmatvec=rmatvec,
+            matmat=matmat,
+            rmatmat=rmatmat,
+            dtype=np.float64,
+        )
+        left, singular_values, _ = svds(
+            centered_standardized,
+            k=available_components,
+            which="LM",
+            solver="propack",
+            random_state=random_state,
+        )
+        order = np.argsort(singular_values)[::-1]
+        left = left[:, order]
+        singular_values = singular_values[order]
+        pivot_rows = np.argmax(np.abs(left), axis=0)
+        signs = np.sign(left[pivot_rows, np.arange(available_components)])
+        signs[signs == 0.0] = 1.0
+        left *= signs
+        pca_scores = left * singular_values
+    else:
+        dense = np.asarray(X, dtype=np.float64)
+        mean = dense.mean(axis=0)
+        scale = dense.std(axis=0)
+        scale[scale == 0.0] = 1.0
+        standardized = (dense - mean) / scale
+        pca_scores = PCA(
+            n_components=available_components,
+            svd_solver="full",
+        ).fit_transform(standardized)
+
+    scores[:, :available_components] = pca_scores
+    return scores
 
 
 def _sample_negative_targets(
@@ -133,6 +216,10 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
         be reused, with their rank incremented each time.
     n_components : int, default=2
         Number of embedding coordinates per sample.
+    pca_init : bool, default=True
+        Initialize ``fit(X)`` coordinates from PCA on standardized features.
+        Extra coordinates beyond the available PCA dimensions are zero. The
+        existing random initialization is used when false and for ``fit_graph``.
     n_epochs : int, default=200
         Number of optimization epochs.
     batch_size : int, default=32768
@@ -206,6 +293,7 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
         progress_callback: Callable[[int, int], None] | None = None,
         mst_progress_callback: Callable[[int, int, str], None] | None = None,
         mst_representatives_per_component: int = 10,
+        pca_init: bool = True,
     ) -> None:
         self.n_msts = n_msts
         self.n_components = n_components
@@ -215,6 +303,7 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
         self.negative_ratio = negative_ratio
         self.lambda_rep = lambda_rep
         self.random_state = random_state
+        self.pca_init = pca_init
         self.epsilon = epsilon
         self.device = device
         self.logistic_margin = logistic_margin
@@ -227,15 +316,7 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
         self.mst_progress_callback = mst_progress_callback
         self.mst_representatives_per_component = mst_representatives_per_component
 
-    def fit(self, X: object, y: object = None) -> "IteratedMinimumSpanningTreeEmbedder":
-        """Fit the embedding and store coordinates for the input rows.
-
-        Successful fits expose stage timings in seconds: `graph_construction_time_`,
-        `embedding_optimization_time_`, `optimizer_negative_sampling_time_`,
-        `optimizer_coordinate_update_time_`, and total `fit_time_`.
-        """
-        fit_started = time.perf_counter()
-        del y  # Unsupervised: labels are intentionally never used.
+    def _validated_fit_options(self) -> dict[str, object]:
         n_msts = _positive_integer("n_msts", self.n_msts)
         n_components = _positive_integer("n_components", self.n_components)
         n_epochs = _positive_integer("n_epochs", self.n_epochs, allow_zero=True)
@@ -269,14 +350,8 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
         logistic_temperature = _finite_nonnegative(
             "logistic_temperature", self.logistic_temperature, strictly_positive=True
         )
-        X_checked = check_array(
-            X, dtype=np.float64, ensure_2d=True, accept_sparse="csr"
-        )
-        if issparse(X_checked):
-            X_checked = csr_matrix(X_checked)
-        n_samples = X_checked.shape[0]
-        if n_samples < 2:
-            raise ValueError("X must contain at least two samples to construct an MST.")
+        if not isinstance(self.pca_init, (bool, np.bool_)):
+            raise ValueError("pca_init must be a boolean.")
         if self.device not in {"auto", "cpu", "mps"}:
             raise ValueError("device must be one of 'auto', 'cpu', or 'mps'.")
         resolved_device = "cpu"
@@ -289,30 +364,50 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
                     "Mac with a supported Apple GPU."
                 )
             resolved_device = "mps"
+        return {
+            "n_msts": n_msts,
+            "n_components": n_components,
+            "n_epochs": n_epochs,
+            "batch_size": batch_size,
+            "negative_ratio": negative_ratio,
+            "mst_neighbors": mst_neighbors,
+            "inter_component_edges": inter_component_edges,
+            "representatives_per_component": representatives_per_component,
+            "max_neighbors": max_neighbors,
+            "learning_rate": learning_rate,
+            "lambda_rep": lambda_rep,
+            "epsilon": epsilon,
+            "logistic_margin": logistic_margin,
+            "logistic_temperature": logistic_temperature,
+            "pca_init": bool(self.pca_init),
+            "resolved_device": resolved_device,
+        }
 
-        graph_started = time.perf_counter()
-        edges, tree_ranks = build_mst_edges(
-            X_checked,
-            n_msts=n_msts,
-            random_state=self.random_state,
-            method=self.mst_method,
-            neighbors=mst_neighbors,
-            inter_component_edges=inter_component_edges,
-            max_neighbors=max_neighbors,
-            representatives_per_component=representatives_per_component,
-            neighbor_device=resolved_device,
-            progress_callback=self.mst_progress_callback,
-            return_ranks=True,
-        )
-        tree_ranks = np.asarray(tree_ranks, dtype=np.int32)
-        self.graph_construction_time_ = time.perf_counter() - graph_started
-
+    def _fit_edges(
+        self,
+        *,
+        n_samples: int,
+        n_components: int,
+        edges: np.ndarray,
+        tree_ranks: np.ndarray,
+        fit_started: float,
+        resolved_device: str,
+        schedule_by_rank: bool,
+        X_checked: object | None = None,
+        X_original: object | None = None,
+        **options,
+    ) -> "IteratedMinimumSpanningTreeEmbedder":
         embedding_started = time.perf_counter()
         rng = np.random.RandomState(self.random_state)
         seed = int(rng.randint(0, np.iinfo(np.int32).max))
-        coordinates = (rng.standard_normal((n_samples, n_components)) * 1e-3).astype(
-            np.float32
-        )
+        if X_checked is not None and options["pca_init"]:
+            coordinates = _standardized_pca_initialization(
+                X_checked, n_components, self.random_state
+            ).astype(np.float32)
+        else:
+            coordinates = (
+                rng.standard_normal((n_samples, n_components)) * 1e-3
+            ).astype(np.float32)
         optimizer_profile = {"negative_sampling": 0.0, "coordinate_updates": 0.0}
 
         def record_optimizer_timing(
@@ -326,49 +421,152 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
             from ._optimizer_mps import optimize_embedding_mps
 
             optimizer = optimize_embedding_mps
-            optimizer_batch_size = batch_size
+            optimizer_batch_size = options["batch_size"]
         else:
             optimizer_batch_size = None
         optimizer_kwargs = dict(
-            n_epochs=n_epochs,
-            learning_rate=learning_rate,
-            negative_ratio=negative_ratio,
-            lambda_rep=lambda_rep,
-            epsilon=epsilon,
-            margin=logistic_margin,
-            temperature=logistic_temperature,
+            n_epochs=options["n_epochs"],
+            learning_rate=options["learning_rate"],
+            negative_ratio=options["negative_ratio"],
+            lambda_rep=options["lambda_rep"],
+            epsilon=options["epsilon"],
+            margin=options["logistic_margin"],
+            temperature=options["logistic_temperature"],
             random_state=seed,
-            schedule_by_rank=self.mst_method != "prim",
+            schedule_by_rank=schedule_by_rank,
             progress_callback=self.progress_callback,
             timing_callback=record_optimizer_timing,
         )
         if optimizer_batch_size is not None:
             optimizer_kwargs["batch_size"] = optimizer_batch_size
-        optimizer(
-            coordinates,
-            edges,
-            tree_ranks,
-            **optimizer_kwargs,
-        )
+        optimizer(coordinates, edges, tree_ranks, **optimizer_kwargs)
+
         self.embedding_optimization_time_ = time.perf_counter() - embedding_started
         self.optimizer_negative_sampling_time_ = optimizer_profile["negative_sampling"]
         self.optimizer_coordinate_update_time_ = optimizer_profile["coordinate_updates"]
-        self.n_features_in_ = X_checked.shape[1]
         self.device_ = resolved_device
-        if hasattr(X, "columns") and all(isinstance(c, str) for c in X.columns):
-            self.feature_names_in_ = np.asarray(X.columns, dtype=object)
-        elif hasattr(self, "feature_names_in_"):
-            del self.feature_names_in_
-        self.X_fit_ = X_checked.copy()
         self.embedding_ = coordinates.copy()
         self.graph_edges_ = edges.copy()
         self.graph_ranks_ = tree_ranks.copy()
         self.graph_weights_ = 1.0 / tree_ranks.astype(np.float64)
+        if X_checked is not None:
+            if hasattr(self, "n_samples_fit_"):
+                del self.n_samples_fit_
+            self.n_features_in_ = X_checked.shape[1]
+            if hasattr(X_original, "columns") and all(
+                isinstance(column, str) for column in X_original.columns
+            ):
+                self.feature_names_in_ = np.asarray(X_original.columns, dtype=object)
+            elif hasattr(self, "feature_names_in_"):
+                del self.feature_names_in_
+            self.X_fit_ = X_checked.copy()
+            self.graph_input_ = False
+        else:
+            for name in ("n_features_in_", "feature_names_in_", "X_fit_"):
+                if hasattr(self, name):
+                    delattr(self, name)
+            self.n_samples_fit_ = n_samples
+            self.graph_input_ = True
         self.fit_time_ = time.perf_counter() - fit_started
         return self
 
+    def fit(self, X: object, y: object = None) -> "IteratedMinimumSpanningTreeEmbedder":
+        """Fit the embedding and store coordinates for the input rows.
+
+        Successful fits expose stage timings in seconds: `graph_construction_time_`,
+        `embedding_optimization_time_`, `optimizer_negative_sampling_time_`,
+        `optimizer_coordinate_update_time_`, and total `fit_time_`.
+        """
+        fit_started = time.perf_counter()
+        del y  # Unsupervised: labels are intentionally never used.
+        options = self._validated_fit_options()
+        X_checked = check_array(
+            X, dtype=np.float64, ensure_2d=True, accept_sparse="csr"
+        )
+        if issparse(X_checked):
+            X_checked = csr_matrix(X_checked)
+        n_samples = X_checked.shape[0]
+        if n_samples < 2:
+            raise ValueError("X must contain at least two samples to construct an MST.")
+        graph_started = time.perf_counter()
+        edges, tree_ranks = build_mst_edges(
+            X_checked,
+            n_msts=options["n_msts"],
+            random_state=self.random_state,
+            method=self.mst_method,
+            neighbors=options["mst_neighbors"],
+            inter_component_edges=options["inter_component_edges"],
+            max_neighbors=options["max_neighbors"],
+            representatives_per_component=options["representatives_per_component"],
+            neighbor_device=options["resolved_device"],
+            progress_callback=self.mst_progress_callback,
+            return_ranks=True,
+        )
+        tree_ranks = np.asarray(tree_ranks, dtype=np.int32)
+        self.graph_construction_time_ = time.perf_counter() - graph_started
+        return self._fit_edges(
+            n_samples=n_samples,
+            n_components=options["n_components"],
+            edges=edges,
+            tree_ranks=tree_ranks,
+            fit_started=fit_started,
+            resolved_device=options["resolved_device"],
+            schedule_by_rank=self.mst_method != "prim",
+            X_checked=X_checked,
+            X_original=X,
+            **{
+                name: value
+                for name, value in options.items()
+                if name not in {"n_components", "n_msts", "resolved_device"}
+            },
+        )
+
+    def fit_graph(
+        self, distance_graph: sparse.spmatrix
+    ) -> "IteratedMinimumSpanningTreeEmbedder":
+        """Fit directly from a sparse graph whose stored values are distances.
+
+        Missing entries are unavailable edges. The method constructs one
+        spanning tree per connected component on each iteration, then optimizes
+        coordinates with IMSTE's existing inverse-rank attraction objective.
+        """
+        fit_started = time.perf_counter()
+        options = self._validated_fit_options()
+        if not sparse.issparse(distance_graph):
+            raise ValueError("distance_graph must be a SciPy sparse matrix.")
+        if distance_graph.ndim != 2 or distance_graph.shape[0] != distance_graph.shape[1]:
+            raise ValueError("distance_graph must be square.")
+        if distance_graph.shape[0] < 2:
+            raise ValueError("distance_graph must contain at least two samples.")
+
+        graph_started = time.perf_counter()
+        edges, tree_ranks = iterated_graph_edges(
+            distance_graph,
+            options["n_msts"],
+            progress_callback=self.mst_progress_callback,
+            return_ranks=True,
+        )
+        self.graph_construction_time_ = time.perf_counter() - graph_started
+        tree_ranks = np.asarray(tree_ranks, dtype=np.int32)
+        return self._fit_edges(
+            n_samples=distance_graph.shape[0],
+            n_components=options["n_components"],
+            edges=edges,
+            tree_ranks=tree_ranks,
+            fit_started=fit_started,
+            resolved_device=options["resolved_device"],
+            schedule_by_rank=True,
+            **{
+                name: value
+                for name, value in options.items()
+                if name not in {"n_components", "n_msts", "resolved_device"}
+            },
+        )
+
     def transform(self, X: object) -> np.ndarray:
         """Return fitted coordinates for the exact training rows only."""
+        if getattr(self, "graph_input_", False):
+            raise ValueError("transform(X) is unavailable after fit_graph(); use embedding_.")
         check_is_fitted(self, attributes=["embedding_", "X_fit_"])
         self._check_feature_names(X)
         X_checked = check_array(

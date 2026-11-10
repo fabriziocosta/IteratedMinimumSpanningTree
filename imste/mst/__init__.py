@@ -7,6 +7,7 @@ from collections.abc import Callable
 import numpy as np
 
 from .prim import iterated_prim_edges
+from .graph import iterated_graph_edges
 
 
 def build_mst_edges(
@@ -47,4 +48,4 @@ def build_mst_edges(
     raise ValueError("mst_method must be either 'prim' or 'famst'.")
 
 
-__all__ = ["build_mst_edges", "iterated_prim_edges"]
+__all__ = ["build_mst_edges", "iterated_prim_edges", "iterated_graph_edges"]
