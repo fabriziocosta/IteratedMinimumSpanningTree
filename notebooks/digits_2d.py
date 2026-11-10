@@ -214,13 +214,13 @@ def display_interactive_embedding(
         style={"description_width": "initial"},
     )
     logistic_margin = widgets.FloatSlider(
-        value=1.0, min=0.0, max=5.0, step=0.1,
+        value=1.0, min=0.0, max=25.0, step=0.1,
         description="Squared-distance margin",
         continuous_update=False,
         style={"description_width": "initial"},
     )
     logistic_temperature = widgets.FloatSlider(
-        value=0.5, min=0.05, max=2.0, step=0.05,
+        value=0.5, min=0.01, max=5.0, step=0.01,
         description="Logistic temperature",
         continuous_update=False,
         style={"description_width": "initial"},
