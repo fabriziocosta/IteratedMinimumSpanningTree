@@ -176,12 +176,15 @@ def run_high_dim_mst_gallery(
     sample_plot_rows: int = 2,
     random_state: int = 42,
     device: str | None = None,
+    plot_embeddings: bool = True,
 ) -> dict[str, object]:
     """Fit and display 2D IMSTE embeddings for several image datasets.
 
-    Dataset loading, normalization, fitting, and plotting happen here so the
-    notebook can remain a thin launcher. Failed remote dataset loads are
-    reported and skipped; successful fits are plotted as they finish.
+    Dataset loading, normalization, and fitting happen here so the notebook
+    can remain a thin launcher. Failed remote dataset loads are reported and
+    skipped. Set ``plot_embeddings=False`` to leave embedding plots to the
+    caller, for example when comparing multiple methods side by side. Sample
+    image grids are displayed either way.
     """
     if max_samples < 10:
         raise ValueError("max_samples must be at least 10.")
@@ -260,31 +263,34 @@ def run_high_dim_mst_gallery(
             }
         )
 
-        fig, ax = plt.subplots(figsize=(7, 5))
-        points = ax.scatter(
-            embedding[:, 0],
-            embedding[:, 1],
-            c=labels,
-            cmap="tab20",
-            s=12,
-            alpha=0.8,
-            linewidths=0,
-        )
-        graph_description = (
-            "approximate FAMST graph" if mst_method == "famst" else "exact Prim graph"
-        )
-        ax.set_title(
-            f"{name} — {len(X):,} samples × "
-            f"{feature_count:,} features passed to IMSTE; "
-            f"{graph_description}; {mst_summary}; "
-            f"{n_epochs} epochs; {elapsed:.2f} s"
-        )
-        ax.set_xlabel("Embedding dimension 1")
-        ax.set_ylabel("Embedding dimension 2")
-        fig.colorbar(points, ax=ax, label="Class label")
-        fig.tight_layout()
-        display(fig)
-        plt.close(fig)
+        if plot_embeddings:
+            fig, ax = plt.subplots(figsize=(7, 5))
+            points = ax.scatter(
+                embedding[:, 0],
+                embedding[:, 1],
+                c=labels,
+                cmap="tab20",
+                s=12,
+                alpha=0.8,
+                linewidths=0,
+            )
+            graph_description = (
+                "approximate FAMST graph"
+                if mst_method == "famst"
+                else "exact Prim graph"
+            )
+            ax.set_title(
+                f"{name} — {len(X):,} samples × "
+                f"{feature_count:,} features passed to IMSTE; "
+                f"{graph_description}; {mst_summary}; "
+                f"{n_epochs} epochs; {elapsed:.2f} s"
+            )
+            ax.set_xlabel("Embedding dimension 1")
+            ax.set_ylabel("Embedding dimension 2")
+            fig.colorbar(points, ax=ax, label="Class label")
+            fig.tight_layout()
+            display(fig)
+            plt.close(fig)
 
     return {
         "embeddings": embeddings,
