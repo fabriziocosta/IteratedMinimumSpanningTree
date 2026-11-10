@@ -131,7 +131,8 @@ def display_interactive_embedding(
         "available for novel predictions). "
         f"Default selection: {initial_sample_count:,} samples, 15 MSTs with "
         "approximate FAMST, "
-        "squared distance, log attraction, logistic repulsion, "
+        "squared distance, log attraction, logistic repulsion (margin 2, "
+        "temperature 2), "
         "weight_sum normalization, PCA initialization at scale 0.10, and "
         "200 epochs. "
         "Click Fit embedding to run."
@@ -214,13 +215,13 @@ def display_interactive_embedding(
         style={"description_width": "initial"},
     )
     logistic_margin = widgets.FloatSlider(
-        value=1.0, min=0.0, max=25.0, step=0.1,
+        value=2.0, min=0.0, max=25.0, step=0.1,
         description="Squared-distance margin",
         continuous_update=False,
         style={"description_width": "initial"},
     )
     logistic_temperature = widgets.FloatSlider(
-        value=0.5, min=0.01, max=5.0, step=0.01,
+        value=2.0, min=0.01, max=5.0, step=0.01,
         description="Logistic temperature",
         continuous_update=False,
         style={"description_width": "initial"},
@@ -482,8 +483,8 @@ def display_interactive_embedding(
         mst_method.value = "famst"
         mst_max_neighbors.value = 120
         lambda_rep.value = 0.5
-        logistic_margin.value = 1.0
-        logistic_temperature.value = 0.5
+        logistic_margin.value = 2.0
+        logistic_temperature.value = 2.0
         negative_ratio.value = 5
         compute_knn.value = False
         n_epochs.value = 200
