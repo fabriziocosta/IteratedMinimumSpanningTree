@@ -220,6 +220,9 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
         Initialize ``fit(X)`` coordinates from PCA on standardized features.
         Extra coordinates beyond the available PCA dimensions are zero. The
         existing random initialization is used when false and for ``fit_graph``.
+    pca_init_scale : float, default=0.1
+        Multiply PCA initialization coordinates by this finite, non-negative
+        scale. It does not affect random initialization or ``fit_graph``.
     n_epochs : int, default=200
         Number of optimization epochs.
     batch_size : int, default=32768
@@ -294,6 +297,7 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
         mst_progress_callback: Callable[[int, int, str], None] | None = None,
         mst_representatives_per_component: int = 10,
         pca_init: bool = True,
+        pca_init_scale: float = 0.1,
     ) -> None:
         self.n_msts = n_msts
         self.n_components = n_components
@@ -315,6 +319,7 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
         self.progress_callback = progress_callback
         self.mst_progress_callback = mst_progress_callback
         self.mst_representatives_per_component = mst_representatives_per_component
+        self.pca_init_scale = pca_init_scale
 
     def _validated_fit_options(self) -> dict[str, object]:
         n_msts = _positive_integer("n_msts", self.n_msts)
@@ -352,6 +357,7 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
         )
         if not isinstance(self.pca_init, (bool, np.bool_)):
             raise ValueError("pca_init must be a boolean.")
+        pca_init_scale = _finite_nonnegative("pca_init_scale", self.pca_init_scale)
         if self.device not in {"auto", "cpu", "mps"}:
             raise ValueError("device must be one of 'auto', 'cpu', or 'mps'.")
         resolved_device = "cpu"
@@ -380,6 +386,7 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
             "logistic_margin": logistic_margin,
             "logistic_temperature": logistic_temperature,
             "pca_init": bool(self.pca_init),
+            "pca_init_scale": pca_init_scale,
             "resolved_device": resolved_device,
         }
 
@@ -403,7 +410,10 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
         if X_checked is not None and options["pca_init"]:
             coordinates = _standardized_pca_initialization(
                 X_checked, n_components, self.random_state
-            ).astype(np.float32)
+            )
+            coordinates = (coordinates * options["pca_init_scale"]).astype(
+                np.float32
+            )
         else:
             coordinates = (
                 rng.standard_normal((n_samples, n_components)) * 1e-3

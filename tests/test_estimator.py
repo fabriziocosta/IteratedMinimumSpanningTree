@@ -89,7 +89,10 @@ def test_default_pca_initialization_matches_standardized_dense_pca():
     from sklearn.decomposition import PCA
 
     standardized = (X - X.mean(axis=0)) / X.std(axis=0)
-    expected = PCA(n_components=2, svd_solver="full").fit_transform(standardized)
+    expected = 0.1 * PCA(n_components=2, svd_solver="full").fit_transform(
+        standardized
+    )
+    assert estimator.pca_init_scale == 0.1
     np.testing.assert_allclose(estimator.embedding_, expected, atol=1e-6)
     np.testing.assert_array_equal(
         estimator.embedding_,
@@ -97,6 +100,40 @@ def test_default_pca_initialization_matches_standardized_dense_pca():
             n_msts=1, n_epochs=0, mst_method="prim", random_state=12
         ).fit(X).embedding_,
     )
+
+
+def test_pca_init_scale_changes_only_pca_initialization_magnitude():
+    X = small_data()
+    pca_scores = _standardized_pca_initialization(X, 2, random_state=6)
+    scaled = IteratedMinimumSpanningTreeEmbedder(
+        n_msts=1,
+        n_epochs=0,
+        mst_method="prim",
+        random_state=6,
+        pca_init_scale=0.25,
+    ).fit(X)
+    random_init = IteratedMinimumSpanningTreeEmbedder(
+        n_msts=1,
+        n_epochs=0,
+        mst_method="prim",
+        random_state=6,
+        pca_init=False,
+        pca_init_scale=0.25,
+    ).fit(X)
+
+    np.testing.assert_allclose(scaled.embedding_, 0.25 * pca_scores, atol=1e-6)
+    expected_rng = np.random.RandomState(6)
+    expected_rng.randint(0, np.iinfo(np.int32).max)
+    expected_random = (
+        expected_rng.standard_normal((len(X), 2)) * 1e-3
+    ).astype(np.float32)
+    np.testing.assert_array_equal(random_init.embedding_, expected_random)
+
+
+@pytest.mark.parametrize("value", [-0.1, np.inf, np.nan, "small"])
+def test_pca_init_scale_must_be_finite_and_nonnegative(value):
+    with pytest.raises(ValueError, match="pca_init_scale"):
+        IteratedMinimumSpanningTreeEmbedder(pca_init_scale=value).fit(small_data())
 
 
 def test_pca_initialization_keeps_csr_input_sparse(monkeypatch):
