@@ -89,7 +89,8 @@ def display_interactive_embedding(
     Dataset choices load lazily and cache balanced sample pools with separate,
     disjoint training and novel rows. Controls configure sample count, MST
     count, MST builder, epoch count, logistic-loss settings, and
-    negative sampling, plus PCA initialization and its coordinate scale.
+    negative sampling, plus PCA initialization and whether its coordinates are
+    globally scaled into ``[-1, 1]``.
     The estimator menu selects transductive IMSTE or its inductive MLP
     extension. Attraction uses fixed weight-sum normalization. Fits use the
     selected epoch count and a 0.05 learning rate. Fitting starts when the
@@ -133,7 +134,8 @@ def display_interactive_embedding(
         "approximate FAMST, "
         "squared distance, log attraction, logistic repulsion (margin 1, "
         "temperature 1), "
-        "weight_sum normalization, PCA initialization at scale 0.10, and "
+        "weight_sum normalization, PCA initialization with global scaling to "
+        "[-1, 1], and "
         "200 epochs. "
         "Click Fit embedding to run."
     )
@@ -179,11 +181,10 @@ def display_interactive_embedding(
         description="PCA initialization",
         indent=False,
     )
-    pca_init_scaling = widgets.Dropdown(
-        options=[("Global scale [-1, 1]", "global"), ("Raw PCA scores", "none")],
-        value="global",
-        description="PCA init scaling",
-        style={"description_width": "initial"},
+    pca_init_scaling = widgets.Checkbox(
+        value=True,
+        description="Scale PCA coordinates to [-1, 1]",
+        indent=False,
     )
     mst_method = widgets.Dropdown(
         options=[("FAMST (approximate)", "famst"), ("Prim (exact)", "prim")],
@@ -475,7 +476,7 @@ def display_interactive_embedding(
         sample_count.value = min(1000, sample_count.max)
         n_msts.value = 15
         pca_init.value = True
-        pca_init_scaling.value = "global"
+        pca_init_scaling.value = True
         mst_method.value = "famst"
         mst_max_neighbors.value = 120
         lambda_rep.value = 0.5
@@ -552,7 +553,9 @@ def display_interactive_embedding(
                     logistic_margin=logistic_margin.value,
                     logistic_temperature=logistic_temperature.value,
                     pca_init=pca_init.value,
-                    pca_init_scaling=pca_init_scaling.value,
+                    pca_init_scaling=(
+                        "global" if pca_init_scaling.value else "none"
+                    ),
                     random_state=random_state,
                     device=device.value,
                     progress_callback=report_progress,
@@ -611,7 +614,11 @@ def display_interactive_embedding(
                     f"τ={logistic_temperature.value:.2f}"
                 )
                 initialization_title = (
-                    f"PCA init ({pca_init_scaling.value})"
+                    (
+                        "PCA init (globally scaled to [-1, 1])"
+                        if pca_init_scaling.value
+                        else "PCA init (raw scores)"
+                    )
                     if pca_init.value
                     else "random initialization"
                 )
