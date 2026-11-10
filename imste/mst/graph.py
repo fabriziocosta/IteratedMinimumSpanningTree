@@ -26,6 +26,27 @@ def iterated_graph_edges(
     Directed entries are treated as undirected candidates. If both directions
     exist, the smaller stored distance is used. Explicitly stored zero
     distances are retained; implicit sparse zeros are absent edges.
+
+    Parameters
+    ----------
+    distance_graph : scipy.sparse.spmatrix
+        Square sparse distance graph. Stored values must be finite and
+        non-negative; diagonal entries are ignored.
+    n_msts : int
+        Number of spanning-forest iterations to build.
+    progress_callback : callable or None
+        Optional callback receiving ``(completed, total, detail)`` per forest.
+    return_ranks : bool
+        If true, return integer edge ranks. Otherwise return inverse-rank edge
+        weights as the second array.
+
+    Returns
+    -------
+    edges : ndarray of shape (n_edges, 2)
+        Selected undirected edges, grouped by forest iteration.
+    ranks_or_weights : ndarray of shape (n_edges,)
+        Integer reuse ranks or their inverse weights, as selected by
+        ``return_ranks``.
     """
     if not sparse.issparse(distance_graph):
         raise ValueError("distance_graph must be a SciPy sparse matrix.")
@@ -58,9 +79,8 @@ def iterated_graph_edges(
 
     edges = np.asarray(list(distances), dtype=np.intp).reshape(-1, 2)
     costs = np.asarray([distances[tuple(edge)] for edge in edges], dtype=np.float64)
-    order = np.lexsort((edges[:, 1], edges[:, 0], costs))
-    edges = edges[order]
-    costs = costs[order]
+    # Distance is the primary sort key; endpoint IDs break ties deterministically.
+    edges = edges[np.lexsort((edges[:, 1], edges[:, 0], costs))]
 
     # Connectivity is based on edge presence, including explicitly stored
     # zero-distance edges.
@@ -77,6 +97,7 @@ def iterated_graph_edges(
     result_ranks: list[int] = []
 
     for tree_index in range(1, n_msts + 1):
+        # Kruskal's disjoint-set state is reset for every spanning forest.
         parent = np.arange(n_samples, dtype=np.intp)
 
         def find(node: int) -> int:
@@ -86,6 +107,8 @@ def iterated_graph_edges(
             return node
 
         selected = 0
+        # First prefer never-used edges. If they cannot span this component,
+        # the second pass reuses the shortest previously selected edges.
         for reused_pass in (False, True):
             for edge in edges:
                 left, right = int(edge[0]), int(edge[1])
@@ -97,6 +120,8 @@ def iterated_graph_edges(
                 if left_root == right_root:
                     continue
                 parent[right_root] = left_root
+                # A new edge gets the current forest rank; reuse increments its
+                # previous rank, lowering its downstream attraction weight.
                 rank = edge_ranks[edge_key] + 1 if was_used else tree_index
                 edge_ranks[edge_key] = rank
                 result_edges.append((left, right))

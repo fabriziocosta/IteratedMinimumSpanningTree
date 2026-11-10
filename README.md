@@ -32,11 +32,15 @@ the exact Prim builder, select `mst_method="prim"`.
 
 For an existing sparse graph whose stored values are distances, use
 `fit_graph()` instead of passing the matrix to `fit()` (which treats rows as
-feature vectors). `fit_graph()` considers only stored edges, treats a
-one-direction edge as undirected, uses the smaller distance for reciprocal
-edges, and preserves disconnected components as separate spanning forests.
-The edge distances select the tree edges; the optimizer then uses IMSTE's
-usual inverse-rank attraction weights.
+feature vectors). Supply a square SciPy sparse matrix with finite,
+non-negative values. Each stored off-diagonal entry is an edge; implicit zeros
+are absent edges, while explicitly stored zero-distance edges are retained.
+Edges are treated as undirected, and reciprocal entries use the smaller
+distance. Disconnected components remain separate spanning forests. Each
+iteration prefers unused edges; when needed, it reuses short edges and
+increments their rank. The optimizer uses the usual inverse-rank attraction
+weights. Since this path has no feature vectors, it uses random initialization
+and exposes the result through `embedding_` rather than `transform()`.
 
 ## Quick start
 

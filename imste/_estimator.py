@@ -46,8 +46,12 @@ def _standardized_pca_initialization(
 ) -> np.ndarray:
     """Return PCA scores after feature-wise standardization.
 
-    Sparse inputs stay sparse: centering is represented as a linear operator
-    around a scaled CSR matrix rather than materializing a dense copy.
+    Each feature is centered and divided by its population standard deviation;
+    constant features use a scale of one. If more embedding dimensions are
+    requested than PCA can provide, the remaining score columns are zero.
+
+    Sparse inputs stay sparse. Their centered, standardized matrix is exposed
+    to the SVD solver as a linear operator, avoiding a dense copy of ``X``.
     """
     n_samples, n_features = X.shape
     available_components = min(n_components, n_samples, n_features)
@@ -66,6 +70,8 @@ def _standardized_pca_initialization(
 
         from scipy.sparse.linalg import LinearOperator, svds
 
+        # The standardized matrix is scaled - 1 * scaled_mean. These products
+        # apply that centering algebraically without storing the dense matrix.
         def matvec(vector):
             return np.asarray(scaled @ vector).ravel() - scaled_mean @ vector
 
@@ -97,6 +103,9 @@ def _standardized_pca_initialization(
             solver="propack",
             random_state=random_state,
         )
+        # PROPACK returns singular values in solver order; PCA orders axes by
+        # descending variance. Canonicalize signs so repeated seeded fits also
+        # return the same orientation for each score axis.
         order = np.argsort(singular_values)[::-1]
         left = left[:, order]
         singular_values = singular_values[order]
@@ -104,6 +113,8 @@ def _standardized_pca_initialization(
         signs = np.sign(left[pivot_rows, np.arange(available_components)])
         signs[signs == 0.0] = 1.0
         left *= signs
+        # PCA coordinates are left singular vectors multiplied by singular
+        # values. The right singular vectors are not needed for initialization.
         pca_scores = left * singular_values
     else:
         dense = np.asarray(X, dtype=np.float64)
@@ -116,6 +127,7 @@ def _standardized_pca_initialization(
             svd_solver="full",
         ).fit_transform(standardized)
 
+    # Keep the requested output shape even when PCA has fewer valid axes.
     scores[:, :available_components] = pca_scores
     return scores
 
@@ -404,6 +416,12 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
         X_original: object | None = None,
         **options,
     ) -> "IteratedMinimumSpanningTreeEmbedder":
+        """Optimize coordinates from a graph and attach fitted diagnostics.
+
+        ``X_checked`` distinguishes feature-based fits from ``fit_graph``.
+        Only feature-based fits can initialize from PCA; both paths share the
+        same optimizer and graph metadata setup.
+        """
         embedding_started = time.perf_counter()
         rng = np.random.RandomState(self.random_state)
         seed = int(rng.randint(0, np.iinfo(np.int32).max))
@@ -483,6 +501,10 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
     def fit(self, X: object, y: object = None) -> "IteratedMinimumSpanningTreeEmbedder":
         """Fit the embedding and store coordinates for the input rows.
 
+        Dense and CSR feature matrices are accepted. By default, standardized
+        PCA scores (multiplied by ``pca_init_scale``) seed coordinate
+        optimization. Set ``pca_init=False`` to use the seeded random start.
+
         Successful fits expose stage timings in seconds: `graph_construction_time_`,
         `embedding_optimization_time_`, `optimizer_negative_sampling_time_`,
         `optimizer_coordinate_update_time_`, and total `fit_time_`.
@@ -536,9 +558,17 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
     ) -> "IteratedMinimumSpanningTreeEmbedder":
         """Fit directly from a sparse graph whose stored values are distances.
 
-        Missing entries are unavailable edges. The method constructs one
-        spanning tree per connected component on each iteration, then optimizes
-        coordinates with IMSTE's existing inverse-rank attraction objective.
+        Every explicitly stored off-diagonal entry is a candidate edge; an
+        implicit sparse zero means that no edge is available. Edges are treated
+        as undirected, reciprocal entries use their smaller distance, and
+        explicit zero-distance edges are retained. The graph's connected
+        components define separate spanning forests. Later iterations reuse
+        short edges when necessary and increase their ranks, which reduces
+        their attraction weights.
+
+        This input has no feature vectors, so coordinates use the seeded random
+        initialization even when ``pca_init=True``. The fitted coordinates are
+        available as ``embedding_``; feature-based ``transform`` is unavailable.
         """
         fit_started = time.perf_counter()
         options = self._validated_fit_options()
