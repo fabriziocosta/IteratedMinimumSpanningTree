@@ -10,6 +10,7 @@ from imste.inductive import InductiveIMSTE
 from imste._estimator import (
     _iterated_mst_edges,
     _sample_negative_targets,
+    _scale_initialization_coordinates,
     _standardized_pca_initialization,
 )
 
@@ -78,7 +79,7 @@ def test_seed_reproduces_embedding():
     np.testing.assert_array_equal(first, second)
 
 
-def test_default_pca_initialization_matches_standardized_dense_pca():
+def test_default_pca_initialization_globally_scales_standardized_dense_pca():
     X = np.array(
         [[0.0, 3.0, 4.0], [1.0, 1.0, 2.0], [2.0, 0.0, 1.0], [4.0, 2.0, 0.0]]
     )
@@ -89,10 +90,11 @@ def test_default_pca_initialization_matches_standardized_dense_pca():
     from sklearn.decomposition import PCA
 
     standardized = (X - X.mean(axis=0)) / X.std(axis=0)
-    expected = 0.1 * PCA(n_components=2, svd_solver="full").fit_transform(
-        standardized
+    pca_scores = PCA(n_components=2, svd_solver="full").fit_transform(standardized)
+    expected = _scale_initialization_coordinates(
+        pca_scores, scaling="global"
     )
-    assert estimator.pca_init_scale == 0.1
+    assert estimator.pca_init_scaling == "global"
     np.testing.assert_allclose(estimator.embedding_, expected, atol=1e-6)
     np.testing.assert_array_equal(
         estimator.embedding_,
@@ -102,15 +104,15 @@ def test_default_pca_initialization_matches_standardized_dense_pca():
     )
 
 
-def test_pca_init_scale_changes_only_pca_initialization_magnitude():
+def test_pca_init_scaling_can_preserve_raw_pca_magnitudes():
     X = small_data()
     pca_scores = _standardized_pca_initialization(X, 2, random_state=6)
-    scaled = IteratedMinimumSpanningTreeEmbedder(
+    raw_pca = IteratedMinimumSpanningTreeEmbedder(
         n_msts=1,
         n_epochs=0,
         mst_method="prim",
         random_state=6,
-        pca_init_scale=0.25,
+        pca_init_scaling="none",
     ).fit(X)
     random_init = IteratedMinimumSpanningTreeEmbedder(
         n_msts=1,
@@ -118,10 +120,9 @@ def test_pca_init_scale_changes_only_pca_initialization_magnitude():
         mst_method="prim",
         random_state=6,
         pca_init=False,
-        pca_init_scale=0.25,
     ).fit(X)
 
-    np.testing.assert_allclose(scaled.embedding_, 0.25 * pca_scores, atol=1e-6)
+    np.testing.assert_allclose(raw_pca.embedding_, pca_scores, atol=1e-6)
     expected_rng = np.random.RandomState(6)
     expected_rng.randint(0, np.iinfo(np.int32).max)
     expected_random = (
@@ -130,10 +131,10 @@ def test_pca_init_scale_changes_only_pca_initialization_magnitude():
     np.testing.assert_array_equal(random_init.embedding_, expected_random)
 
 
-@pytest.mark.parametrize("value", [-0.1, np.inf, np.nan, "small"])
-def test_pca_init_scale_must_be_finite_and_nonnegative(value):
-    with pytest.raises(ValueError, match="pca_init_scale"):
-        IteratedMinimumSpanningTreeEmbedder(pca_init_scale=value).fit(small_data())
+@pytest.mark.parametrize("value", ["small", "minmax", ""])
+def test_pca_init_scaling_rejects_unsupported_modes(value):
+    with pytest.raises(ValueError, match="pca_init_scaling"):
+        IteratedMinimumSpanningTreeEmbedder(pca_init_scaling=value).fit(small_data())
 
 
 def test_pca_initialization_keeps_csr_input_sparse(monkeypatch):

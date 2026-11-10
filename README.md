@@ -251,7 +251,7 @@ Raw coordinate arrays remain supported.
 | `n_msts` | `15` | Number of spanning-tree iterations; bottleneck edge reuse is penalized by incrementing its rank |
 | `n_components` | `2` | Embedding dimensions |
 | `pca_init` | `True` | Initialize `fit(X)` with PCA on feature-wise standardized inputs; extra PCA dimensions are zero-filled |
-| `pca_init_scale` | `0.1` | Multiply PCA initialization coordinates by this finite, non-negative scale |
+| `pca_init_scaling` | `"global"` | Apply one uniform scale to fit all PCA coordinates into `[-1, 1]`, or use `"none"` to preserve raw magnitudes |
 | `n_epochs` | `200` | Coordinate-optimization epochs |
 | `batch_size` | `32768` | Maximum active edges per MPS update batch; ignored by CPU optimizer |
 | `learning_rate` | `0.05` | Coordinate optimizer learning rate |
@@ -269,8 +269,9 @@ Raw coordinate arrays remain supported.
 | `mst_max_neighbors` | `None` | FAMST neighbor cap; defaults to four times `mst_neighbors` |
 
 By default, `fit(X)` starts coordinate optimization from PCA scores computed
-after feature-wise standardization, multiplied by `pca_init_scale`. The default
-scale is `0.1`; PCA scores are not restricted to the range `[-1, 1]`. Set
+after feature-wise standardization and uniformly scaled by the maximum absolute
+score into `[-1, 1]`. This preserves the relative scale between PCA axes. Set
+`pca_init_scaling="none"` to preserve raw PCA score magnitudes, or
 `pca_init=False` to use the seeded random initialization instead.
 `fit_graph()` uses the same PCA initialization when `init_features` is supplied;
 otherwise it uses random initialization.

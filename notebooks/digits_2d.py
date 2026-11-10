@@ -179,14 +179,10 @@ def display_interactive_embedding(
         description="PCA initialization",
         indent=False,
     )
-    pca_init_scale = widgets.FloatSlider(
-        value=0.1,
-        min=0.0,
-        max=1.0,
-        step=0.01,
-        readout_format=".2f",
-        description="PCA init scale",
-        continuous_update=False,
+    pca_init_scaling = widgets.Dropdown(
+        options=[("Global scale [-1, 1]", "global"), ("Raw PCA scores", "none")],
+        value="global",
+        description="PCA init scaling",
         style={"description_width": "initial"},
     )
     mst_method = widgets.Dropdown(
@@ -288,10 +284,10 @@ def display_interactive_embedding(
         style={"description_width": "initial"},
     )
     batch_size.layout.display = "none"
-    pca_init_scale.disabled = not pca_init.value
+    pca_init_scaling.disabled = not pca_init.value
 
-    def update_pca_scale_availability(change) -> None:
-        pca_init_scale.disabled = not change["new"]
+    def update_pca_scaling_availability(change) -> None:
+        pca_init_scaling.disabled = not change["new"]
 
     def update_batch_size_visibility(change) -> None:
         batch_size.layout.display = "" if change["new"] == "mps" else "none"
@@ -479,7 +475,7 @@ def display_interactive_embedding(
         sample_count.value = min(1000, sample_count.max)
         n_msts.value = 15
         pca_init.value = True
-        pca_init_scale.value = 0.1
+        pca_init_scaling.value = "global"
         mst_method.value = "famst"
         mst_max_neighbors.value = 120
         lambda_rep.value = 0.5
@@ -556,7 +552,7 @@ def display_interactive_embedding(
                     logistic_margin=logistic_margin.value,
                     logistic_temperature=logistic_temperature.value,
                     pca_init=pca_init.value,
-                    pca_init_scale=pca_init_scale.value,
+                    pca_init_scaling=pca_init_scaling.value,
                     random_state=random_state,
                     device=device.value,
                     progress_callback=report_progress,
@@ -615,7 +611,7 @@ def display_interactive_embedding(
                     f"τ={logistic_temperature.value:.2f}"
                 )
                 initialization_title = (
-                    f"PCA ×{pca_init_scale.value:.2f}"
+                    f"PCA init ({pca_init_scaling.value})"
                     if pca_init.value
                     else "random initialization"
                 )
@@ -696,7 +692,7 @@ def display_interactive_embedding(
     dataset.observe(select_dataset, names="value")
     embedding_type.observe(update_estimator_controls, names="value")
     device.observe(update_batch_size_visibility, names="value")
-    pca_init.observe(update_pca_scale_availability, names="value")
+    pca_init.observe(update_pca_scaling_availability, names="value")
     fit_button.on_click(fit_and_display)
     reset_button.on_click(reset_sliders)
     mlp_button.on_click(show_mlp_predictions)
@@ -705,7 +701,7 @@ def display_interactive_embedding(
         [
             widgets.HBox([dataset]),
             widgets.HBox([sample_count, n_msts]),
-            widgets.HBox([pca_init, pca_init_scale]),
+            widgets.HBox([pca_init, pca_init_scaling]),
             widgets.HBox([mst_method]),
             widgets.HBox([mst_max_neighbors]),
             widgets.HBox([n_epochs]),
@@ -744,7 +740,7 @@ def display_interactive_embedding(
             "batch_size": batch_size,
             "n_msts": n_msts,
             "pca_init": pca_init,
-            "pca_init_scale": pca_init_scale,
+            "pca_init_scaling": pca_init_scaling,
             "mst_method": mst_method,
             "mst_max_neighbors": mst_max_neighbors,
             "lambda_rep": lambda_rep,
