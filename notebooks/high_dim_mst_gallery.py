@@ -168,10 +168,11 @@ def _default_device() -> str:
 def run_high_dim_mst_gallery(
     *,
     max_samples: int = 1000,
-    n_msts: int = 15,
+    n_msts: int = 4,
     n_epochs: int = 200,
     mst_method: str = "famst",
-    negative_ratio: int = 5,
+    negative_ratio: int = 1,
+    mst_max_neighbors: int | None = 15,
     lambda_rep: float = 0.5,
     sample_plot_rows: int = 2,
     random_state: int = 42,
@@ -184,7 +185,9 @@ def run_high_dim_mst_gallery(
     can remain a thin launcher. Failed remote dataset loads are reported and
     skipped. Set ``plot_embeddings=False`` to leave embedding plots to the
     caller, for example when comparing multiple methods side by side. Sample
-    image grids are displayed either way.
+    image grids are displayed either way. ``negative_ratio`` controls sampled
+    non-neighbors per endpoint of a positive edge, and ``mst_max_neighbors``
+    caps FAMST's approximate-neighbor search.
     """
     if max_samples < 10:
         raise ValueError("max_samples must be at least 10.")
@@ -223,6 +226,7 @@ def run_high_dim_mst_gallery(
                         n_components=2,
                         n_epochs=n_epochs,
                         mst_method=mst_method,
+                        mst_max_neighbors=mst_max_neighbors,
                         learning_rate=0.05,
                         negative_ratio=negative_ratio,
                         lambda_rep=lambda_rep,
@@ -254,6 +258,7 @@ def run_high_dim_mst_gallery(
                 "classes": len(np.unique(labels)),
                 "n_msts": n_msts,
                 "mst_method": mst_method,
+                "mst_max_neighbors": mst_max_neighbors,
                 "n_epochs": n_epochs,
                 "negative_ratio": negative_ratio,
                 "lambda_rep": lambda_rep,
