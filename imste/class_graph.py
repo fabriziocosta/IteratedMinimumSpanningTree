@@ -236,6 +236,7 @@ def plot_class_mixture_mst(
     min_edge_alpha: float = 0.2,
     max_edge_alpha: float = 0.9,
     random_state: int = 42,
+    class_colors: Mapping[object, object] | None = None,
 ):
     """Plot class-specific GMM centers and iterated-MST edges over embeddings.
 
@@ -259,7 +260,8 @@ def plot_class_mixture_mst(
     samples in 2D. The cross-assignment probabilities are averaged across both
     directions. Edge width matches node outlines, and opacity increases with
     this symmetric overlap score. ``point_alpha`` controls the scatter-point
-    opacity independently of edge opacity.
+    opacity independently of edge opacity. ``class_colors`` can provide a
+    label-to-color mapping to keep class colors consistent across plots.
 
     Returns
     -------
@@ -305,7 +307,14 @@ def plot_class_mixture_mst(
         raise ValueError("At least two classes are required for a class graph.")
     class_to_code = {label: code for code, label in enumerate(classes)}
     cmap_name = "tab20" if len(classes) > 10 else "tab10"
-    cmap = ListedColormap(plt.get_cmap(cmap_name).colors[:len(classes)])
+    if class_colors is None:
+        color_list = plt.get_cmap(cmap_name).colors[:len(classes)]
+    else:
+        missing = [label for label in classes if label not in class_colors]
+        if missing:
+            raise ValueError(f"class_colors is missing labels: {missing!r}")
+        color_list = [class_colors[label] for label in classes]
+    cmap = ListedColormap(color_list)
     norm = BoundaryNorm(np.arange(-0.5, len(classes) + 0.5), len(classes))
 
     mixtures = {}

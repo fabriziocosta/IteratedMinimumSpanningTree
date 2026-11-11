@@ -345,6 +345,9 @@ examples to controlled and biological IMSTE–UMAP comparisons:
 3. [02 — Biological IMSTE and UMAP comparison](notebooks/02_biological_imste_umap_comparison.ipynb):
    evaluate annotated single-cell and diagnostic datasets with parameter and
    seed checks.
+4. [03 — GSE52529 human myoblast pseudotime](notebooks/03_gse52529_human_myoblast_pseudotime.ipynb):
+   compare embeddings colored by observed differentiation time and calculate
+   diffusion pseudotime from the GEO FPKM matrix.
 
 Earlier exploratory and interactive notebooks are in
 [notebooks/archive](notebooks/archive/). This includes the [interactive 2D
