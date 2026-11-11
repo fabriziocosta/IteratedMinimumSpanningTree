@@ -29,3 +29,31 @@
 ### PCA versus classical MDS
 
 For Euclidean input distances, classical MDS produces the same principal-coordinate geometry as PCA, up to rotation or reflection. Start by testing PCA rather than implementing a separate dense classical-MDS initialization. Revisit classical MDS if the project later supports non-Euclidean or precomputed dissimilarities.
+
+## Scale IMSTE to large datasets
+
+- [ ] Add a large-dataset benchmark that measures the stages separately.
+  - Include representative dense and CSR inputs, with sample sizes that grow beyond the current small and medium examples.
+  - Record neighbor-graph construction time, MST extraction and refinement time, coordinate-optimization time, peak memory, and total runtime.
+  - Record graph and embedding quality alongside runtime, including neighbor preservation and a global-structure measure.
+  - Compare FAMST with exact Prim only at sizes where the exact run is feasible; report when the exact baseline is omitted.
+  - Reuse a constructed graph when comparing optimizer or initialization settings so each comparison isolates the changed stage.
+  - Document the hardware, dataset dimensions, sparsity, and benchmark procedure.
+
+- [ ] Investigate coarse-to-fine initialization for large graphs.
+  - Prototype recursive graph coarsening, layout of the coarsened graph, then expansion and refinement across levels.
+  - Preserve IMSTE's ranked multi-MST edge information during coarsening and expansion.
+  - Compare with random and PCA initialization using the same graph, optimizer settings, seeds, runtime, and quality measures.
+  - Keep the approach experimental unless results show a repeatable benefit.
+
+## Add a Datashader embedding visualization
+
+- [ ] Add an optional Datashader renderer for large two-dimensional embeddings.
+  - Aggregate points into screen pixels so dense regions remain interpretable without drawing every point as a separate marker.
+  - Support categorical labels with a stable color mapping and a density shading mode.
+  - Redraw the aggregation for the visible coordinate range when users zoom or pan, so the display reflects the points in that view.
+  - Keep the existing Matplotlib renderers for ordinary-sized embeddings and make Datashader an optional visualization dependency.
+  - Define behavior for missing labels, points outside the current view, and empty selections.
+  - Add a gallery example comparing ordinary scatter rendering with pixel aggregation at increasing sample sizes, including zoomed views.
+  - Document the renderer's limits and when to use it; retain access to individual point metadata for selection or inspection where the plotting frontend permits it.
+
