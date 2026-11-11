@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import numbers
+import sys
 import time
 from pathlib import Path
 from urllib.request import urlretrieve
@@ -16,10 +17,11 @@ from sklearn.model_selection import train_test_split
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
-try:  # Notebook execution puts the repository root on sys.path.
-    from imste import IteratedMinimumSpanningTreeEmbedder
-except ModuleNotFoundError:  # Also support importing as notebooks.high_dim_mst_gallery.
-    from ..imste import IteratedMinimumSpanningTreeEmbedder
+_project_root = Path(__file__).resolve().parents[2]
+if str(_project_root) not in sys.path:
+    sys.path.insert(0, str(_project_root))
+
+from imste import IteratedMinimumSpanningTreeEmbedder
 
 
 def _stratified_sample(

@@ -244,6 +244,22 @@ accept a fitted `IteratedMinimumSpanningTreeEmbedder` or `InductiveIMSTE`
 directly; they use `embedding_` or the inductive model's `reference_embedding_`.
 Raw coordinate arrays remain supported.
 
+For class-level graph overlays across one or more embeddings, use
+`imste.class_graph.plot_class_mixture_mst`. It fits full-covariance Gaussian
+mixtures per class in each 2D embedding, connects their component centers with
+iterated MSTs, and maps symmetric cross-component posterior probability to
+edge opacity. For each edge, the two endpoint Gaussian densities form an
+equal-prior pairwise posterior, evaluated on the samples assigned to the
+opposite component in each direction. The directional probabilities are
+averaged to score the edge; chance-level overlap (0.5) is fully opaque. It
+returns the figure, plot axes, and a table of per-edge scores.
+
+To compare the class-pair relations selected by two embedding graphs, use
+`imste.class_graph.compare_class_graph_relations`. It collapses component
+edges to unordered class pairs, removes duplicate edges across MST iterations,
+and ranks relations present in only one graph by mean chance-normalized edge
+error. The per-edge maximum and component pairs remain available for review.
+
 ## Parameters
 
 | Parameter | Default | Meaning |
@@ -318,22 +334,25 @@ optimization by passing an `IteratedMinimumSpanningTreeEmbedder` as `embedder`.
 
 ## Notebooks
 
-- [Performance refactor benchmark](benchmarks/performance_refactor.py): report
-  separate FAMST, optimizer, and total fit medians with neighborhood metrics,
-  alongside a comparable UMAP run. Local reference results are in
-  [benchmarks/RESULTS.md](benchmarks/RESULTS.md).
-- [MST scaling benchmark](notebooks/mst_scaling_benchmark.ipynb): compare exact
-  Prim with approximate FAMST graph construction over increasing dataset sizes.
-- [Interactive 2D embedding](notebooks/digits_2d_interactive.ipynb): choose a
-  dataset, select exact Prim or approximate FAMST, configure fit settings, and
-  optionally compare MLP predictions with the optimized coordinates.
-- [Interactive 3D embedding](notebooks/digits_3d_interactive.ipynb): select
-  exact Prim or approximate FAMST and explore three-dimensional embeddings
-  with Plotly.
-- [Parameter sweep](notebooks/digits_parameter_sweep.ipynb): compare IMSTE
-  settings and reference embeddings on MNIST.
-- [High-dimensional dataset gallery](notebooks/high_dim_mst_gallery.ipynb):
-  view embeddings across image datasets.
+The notebooks are ordered as a short progression from standard high-dimensional
+examples to controlled and biological IMSTE–UMAP comparisons:
 
+1. [00 — High-dimensional dataset gallery](notebooks/00_high_dim_mst_gallery.ipynb):
+   run IMSTE on standard image datasets and inspect embedding quality and fit
+   times.
+2. [01 — Synthetic IMSTE and UMAP comparison](notebooks/01_imste_umap_synthetic_comparison.ipynb):
+   compare global layout and local-neighbor behavior on controlled geometries.
+3. [02 — Biological IMSTE and UMAP comparison](notebooks/02_biological_imste_umap_comparison.ipynb):
+   evaluate annotated single-cell and diagnostic datasets with parameter and
+   seed checks.
+
+Earlier exploratory and interactive notebooks are in
+[notebooks/archive](notebooks/archive/). This includes the [interactive 2D
+embedding](notebooks/archive/digits_2d_interactive.ipynb), [interactive 3D
+embedding](notebooks/archive/digits_3d_interactive.ipynb), [parameter
+sweep](notebooks/archive/digits_parameter_sweep.ipynb), and [MST scaling
+benchmark](notebooks/archive/mst_scaling_benchmark.ipynb).
+
+Python helper modules used by the notebooks are in [notebooks/src](notebooks/src/).
 For the full method description and equations, see the
 [IMSTE whitepaper](WHITEPAPER.md).

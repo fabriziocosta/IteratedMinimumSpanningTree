@@ -20,7 +20,7 @@ from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 
 # Support running from a source checkout without requiring an editable install.
-_project_root = Path(__file__).resolve().parents[1]
+_project_root = Path(__file__).resolve().parents[2]
 if str(_project_root) not in sys.path:
     sys.path.insert(0, str(_project_root))
 

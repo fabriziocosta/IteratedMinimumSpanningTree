@@ -17,7 +17,7 @@ from sklearn.preprocessing import StandardScaler
 try:  # Notebook execution puts this directory directly on sys.path.
     from digits_sweep import load_mnist_data
     from high_dim_mst_gallery import _load_kmnist, _load_openml, _stratified_sample
-except ModuleNotFoundError:  # Also support importing as notebooks.digits_2d.
+except ModuleNotFoundError:  # Also support importing as notebooks.src.digits_2d.
     from .digits_sweep import load_mnist_data
     from .high_dim_mst_gallery import _load_kmnist, _load_openml, _stratified_sample
 from imste import IteratedMinimumSpanningTreeEmbedder

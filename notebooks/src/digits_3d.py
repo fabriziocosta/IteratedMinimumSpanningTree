@@ -17,7 +17,7 @@ from sklearn.neighbors import KNeighborsClassifier
 
 try:  # Notebook execution puts this directory directly on sys.path.
     from digits_sweep import format_duration, load_mnist_data
-except ModuleNotFoundError:  # Also support importing as notebooks.digits_3d.
+except ModuleNotFoundError:  # Also support importing as notebooks.src.digits_3d.
     from .digits_sweep import format_duration, load_mnist_data
 from imste import IteratedMinimumSpanningTreeEmbedder
 
