@@ -4,36 +4,37 @@
 
 Iterated Minimum Spanning Tree Embedding (IMSTE) is an unsupervised method for
 placing a finite set of high-dimensional observations in a lower-dimensional
-coordinate space. It builds a weighted graph by repeatedly finding a minimum
-spanning tree (MST) and removing its edges before finding the next tree. The
-union of these edge-disjoint trees supplies an adaptive set of relationships:
-early trees preserve the shortest connections, while later trees add longer
-connections that help describe broader structure. A rank-based weight controls
-the influence of each tree. The graph is then embedded by optimizing an
-attractive loss on graph edges together with a sampled repulsive loss on
-non-edges.
+coordinate space. It builds a weighted graph from ranked spanning-tree
+iterations. Earlier trees use shorter connections where possible; later trees
+prefer unused edges and reuse bottleneck edges when needed to connect the
+residual graph. A rank-based weight controls the influence of each edge. The
+graph is then embedded by optimizing an attractive loss on graph edges
+together with a sampled repulsive loss on non-edges.
 
-The method is deliberately direct. It uses Euclidean distances, a dense MST
-construction, and a small differentiable objective. It does not use class
-labels, a nearest-neighbor graph, or an out-of-sample projection. This paper
-describes the implementation in this repository and its practical limits; it
-makes no claim that the method is a drop-in replacement for established
-embedding methods.
+The method is deliberately direct. It uses Euclidean distances, ranked
+spanning-tree construction, and a small differentiable objective. The default
+FAMST backend builds an approximate sparse candidate graph; exact Prim is also
+available. The core estimator does not use class labels or define an
+out-of-sample projection. An optional `InductiveIMSTE` wrapper learns an
+approximate MLP projection. This paper describes the implementation in this
+repository and its practical limits; it makes no claim that the method is a
+drop-in replacement for established embedding methods.
 
 ## 1. Motivation and scope
 
 An embedding aims to represent relationships among observations with fewer
 coordinates than the original feature space. IMSTE represents those
-relationships through a sequence of spanning trees. The first tree connects
-each sample to the dataset through the shortest possible total edge length.
-After its edges are removed, the next tree must use different connections.
-Repeating this process exposes additional relationships without choosing a
-fixed number of nearest neighbors for every point.
+relationships through a sequence of ranked spanning trees. The default FAMST
+backend starts from an approximate nearest-neighbor graph, while exact Prim
+considers the complete Euclidean graph. Later iterations prefer unused edges;
+when a bottleneck requires reuse, the edge's rank increases and its attraction
+weight decreases.
 
-The estimator is intended for exploratory visualization and geometric
-inspection of a fixed dataset. Its output is a learned coordinate for each
-training row. The current implementation does not define coordinates for new,
-unseen rows.
+The core estimator is intended for exploratory visualization and geometric
+inspection of a fixed dataset. It returns learned coordinates for training
+rows, and its `transform` method accepts only those same rows in their original
+order. `InductiveIMSTE` can approximate coordinates for new rows with a
+separately trained MLP.
 
 ## 2. Notation
 
@@ -57,16 +58,23 @@ The number of trees is R.
 
 ## 3. Graph construction
 
-The method computes all pairwise Euclidean distances:
+The graph uses Euclidean distances between input rows. The default
+`mst_method="famst"` builds an approximate sparse nearest-neighbor candidate
+graph and adds component-connecting bridge candidates. The alternative
+`mst_method="prim"` constructs exact trees over the complete Euclidean graph.
+Dense Prim input stores all pairwise distances; CSR Prim input computes
+distance rows on demand. An existing sparse distance graph can also be supplied
+through `fit_graph()`.
 
 $$
 D_{ij}=\sqrt{\sum_{k=1}^{p}(x_{ik}-x_{jk})^2}.
 $$
 
-For each requested rank, the method finds an MST over the remaining available
-edges, adds the tree's edges to the embedding graph, and removes those edges
-in both directions. Thus no undirected edge appears in more than one tree.
-An edge first selected at rank $r$ receives the fixed inverse-rank weight:
+For each requested iteration, the method finds a spanning tree, preferring
+available unused edges. If removing earlier trees leaves a bottleneck, the
+builder reuses only the edges needed to connect residual components. A newly
+selected edge receives the iteration number as its rank; each reuse increments
+that edge's previous rank. Its inverse-rank weight is:
 
 $$
 w_{ij}=\frac{1}{r}.
@@ -75,22 +83,29 @@ $$
 The edge weight depends on its tree rank, not on a separately applied distance
 decay.
 
-When all requested trees can be constructed, the resulting graph contains:
+For connected feature-based input, when all requested iterations succeed, the
+graph stores $R(n-1)$ edge occurrences. Reused bottleneck edges mean the number
+of distinct undirected edges can be smaller. FAMST increases its neighbor count
+and repairs local bottlenecks when possible; it raises an error if it cannot
+construct the requested iterations within its configured neighbor cap. Exact
+Prim can fall back to the shortest complete-graph edge crossing a disconnected
+residual cut.
+Its explicit edge-availability mask allows distinct samples at zero distance
+to remain valid edges.
 
 $$
-|E|=R(n-1).
+|E|_{\mathrm{occurrences}}=R(n-1).
 $$
-
-If removing earlier trees disconnects the available graph, fitting stops with
-an error asking for fewer trees. The implementation uses dense Prim
-construction with an explicit edge-availability mask. This allows distinct
-samples at zero distance to remain valid MST edges.
 
 ## 4. Coordinate objective
 
-Each sample receives a trainable coordinate, initialized with small Gaussian
-noise and stored as a contiguous float32 array. A Numba-compiled SGD kernel
-updates coordinates directly.
+Each sample receives a trainable coordinate stored as a contiguous float32
+array. By default, `fit(X)` initializes it from PCA scores computed on
+feature-wise standardized input, then applies one global scale so all scores
+fit in `[-1, 1]`. Set `pca_init=False` to use small seeded Gaussian noise.
+`fit_graph()` uses random initialization unless `init_features` are supplied.
+A Numba-compiled SGD kernel updates coordinates directly on CPU; the optional
+MPS backend uses PyTorch.
 
 ### 4.1 Attraction on graph edges
 
@@ -172,7 +187,11 @@ positive-edge losses by their graph-wide total weight; the negative term is
 unchanged.
 
 The estimator uses the logarithmic attraction and logistic repulsion described
-above. The estimator optimizes sample coordinates directly.
+above. It optimizes sample coordinates directly. `fit_graph()` accepts a
+square sparse distance graph, treats stored off-diagonal entries as edges, and
+preserves disconnected components as spanning forests. With `init_features`,
+it can use standardized PCA scores to initialize coordinates; the supplied
+graph remains the optimization objective.
 
 ## 5. Optimization procedure
 
@@ -199,7 +218,12 @@ diagnostic.
 
 | Parameter | Default | Role |
 | --- | ---: | --- |
-| `n_msts` | 15 | Number of edge-disjoint MSTs |
+| `n_msts` | 15 | Number of spanning-tree iterations; bottleneck edges can be reused with increased rank |
+| `mst_method` | `famst` | Approximate sparse FAMST trees or exact Prim trees |
+| `mst_neighbors` | 15 | Initial FAMST neighbor count; the builder targets at least `2 * n_msts` |
+| `mst_inter_component_edges` | 5 | Bridge candidates retained per selected component pair |
+| `mst_representatives_per_component` | 10 | Maximum component representatives used to select bridge pairs |
+| `mst_max_neighbors` | `None` | FAMST neighbor cap; `None` permits growth up to four times the starting count |
 | `logistic_margin` | 1.0 | Squared-distance margin for logistic repulsion |
 | `logistic_temperature` | 0.5 | Softness of the logistic repulsion; must be positive |
 | `n_components` | 2 | Number of output dimensions |
@@ -211,9 +235,12 @@ diagnostic.
 | `epsilon` | `1e-4` | Smoothing for the pairwise edge probability |
 | `random_state` | 42 | Seed for initialization, shuffling, and sampling |
 | `device` | `auto` | `auto`/`cpu` use Numba CPU; `mps` uses batched PyTorch MPS updates |
+| `pca_init` | `True` | Use standardized PCA scores to initialize feature-based fits |
+| `pca_init_scaling` | `global` | Scale PCA scores uniformly into `[-1, 1]`; `none` preserves their magnitudes |
 
-The graph and pairwise distances are constructed on the CPU. The transductive
-optimizer uses Numba on CPU or PyTorch on MPS, depending on `device`.
+Graph construction runs on CPU except that dense FAMST neighbor search can use
+exact chunked search on MPS when `device="mps"`. The transductive optimizer
+uses Numba on CPU or PyTorch on MPS, depending on `device`.
 
 ## 6. Practical use
 
@@ -240,15 +267,16 @@ embedding = IteratedMinimumSpanningTreeEmbedder(
 ```
 
 The returned array has shape `(n_samples, n_components)`. Coordinates are
-centered after every optimization step, but their orientation, reflection, and
-scale are not otherwise fixed. Interpret the embedding through relative
+centered after every epoch, but their orientation, reflection, and scale are
+not otherwise fixed. Interpret the embedding through relative
 relationships and visual patterns, rather than as a coordinate system with
 absolute units.
 
 ## 7. Computational cost
 
-The exact `mst_method="prim"` backend constructs a pairwise distance matrix
-requiring quadratic memory in the number of samples:
+Dense input to the exact `mst_method="prim"` backend constructs a pairwise
+distance matrix requiring quadratic memory in the number of samples. CSR input
+computes distance rows on demand and avoids storing that matrix:
 
 $$
 O(n^2)
@@ -267,10 +295,11 @@ $$
 O(Rn^2)
 $$
 
-When all requested trees can be constructed, the graph contains:
+When all requested iterations succeed, the graph stores this many edge
+occurrences, including repeated bottleneck edges:
 
 $$
-|E|=R(n-1)
+|E|_{\mathrm{occurrences}}=R(n-1)
 $$
 
 The default `mst_method="famst"` backend builds a sparse nearest-neighbor
@@ -278,13 +307,13 @@ graph. CPU builds use PyNNDescent; MPS builds use exact chunked nearest-neighbor
 search on the GPU. It samples up to `mst_representatives_per_component`
 points per ANN component, builds an exact MST over those representatives, and
 uses its cross-component edges to select unique component pairs for bridge
-search and refinement. It then extracts edge-disjoint trees from the candidate
-graph. For a fixed neighbor count and a small number of ANN components, its
+search and refinement. It extracts ranked trees, reusing bottleneck edges when
+needed. For a fixed neighbor count and a small number of ANN components, its
 graph storage grows approximately linearly with the number of rows. Its result
 is approximate and does not guarantee the same trees as the complete Euclidean
 graph. The CPU implementation uses PyNNDescent. Both paths can increase the
 neighbor count, within `mst_max_neighbors`, when the candidate graph lacks
-enough edge-disjoint trees. This follows the FAMST approach by Almansoori and
+enough unused edges. This follows the FAMST approach by Almansoori and
 Telek (2025).
 
 Optimization cost grows with the number of epochs, graph edges, negative ratio,
@@ -320,13 +349,11 @@ embedding algorithm described here.
 
 - Poor feature scaling can cause some dimensions to dominate Euclidean distances
   and produce a poor graph.
-- The exact Prim backend uses dense pairwise distances and therefore limits
-  practical sample counts through quadratic time and memory.
+- Dense exact Prim uses quadratic pairwise-distance memory; CSR exact Prim
+  avoids storing that matrix but still has quadratic time in sample count.
 - The FAMST backend is approximate; quality depends on ANN recall and the
-  candidate graph may fail to contain the requested number of edge-disjoint
-  spanning trees under its configured neighbor cap.
-- Repeated MSTs may become impossible before the requested rank because
-  previously selected edges can disconnect the remaining graph.
+  candidate graph may fail to support the requested number of ranked spanning
+  tree iterations under its configured neighbor cap.
 - The embedding is stochastic and non-convex. A fixed seed supports
   reproducibility but does not establish that a result is unique or globally
   optimal.
@@ -340,11 +367,9 @@ embedding algorithm described here.
 
 ## 10. Summary
 
-IMSTE constructs a rank-weighted union of edge-disjoint minimum
-spanning trees and learns low-dimensional coordinates by balancing attraction
-along graph edges against sampled repulsion between graph non-neighbors. The
-approach is compact and easy to inspect, with its main tradeoff being the
-quadratic cost of dense graph construction. It is best treated as an
-exploratory embedding. Use exact Prim for smaller datasets where exact trees
-matter, or FAMST when sparse approximate trees are an acceptable tradeoff for
-larger datasets.
+IMSTE constructs a rank-weighted union of spanning-tree iterations, reusing
+bottleneck edges when necessary, and learns low-dimensional coordinates by
+balancing attraction along graph edges against sampled repulsion between graph
+non-neighbors. The approach is compact and easy to inspect. Use exact Prim for
+smaller datasets where exact trees matter, or FAMST when sparse approximate
+trees are an acceptable tradeoff for larger datasets.
