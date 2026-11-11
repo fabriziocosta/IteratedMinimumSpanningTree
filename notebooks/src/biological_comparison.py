@@ -104,6 +104,7 @@ def load_biological_datasets(*, random_state=42, n_hvg=2000, n_pcs=50):
             "X": paul_X,
             "labels": paul_labels,
             "stage_labels": paul_stages,
+            "stage_order": ["Progenitor", "Differentiating lineage", "Specialized cell"],
             "stage_description": "broad curated maturation stage (exploratory grouping)",
             "display": "Paul15 myeloid progenitors",
             "feature_description": f"{n_hvg} HVGs -> {n_pcs} PCs (direct input)",
@@ -137,7 +138,7 @@ def load_gse52529_myoblasts(*, random_state=42, n_hvg=2000, n_pcs=50):
         compression="gzip",
     )
     adata = sc.AnnData(
-        X=expression.loc[:, metadata["sample_id"]].T.to_numpy(dtype=np.float32),
+        X=expression.loc[:, metadata["sample_id"]].T.to_numpy(dtype=np.float32, copy=True),
         obs=metadata.set_index("sample_id"),
         var=pd.DataFrame(index=expression.index.astype(str)),
     )
@@ -279,7 +280,7 @@ def plot_embedding_comparisons(datasets, embeddings, alignment, *, point_size=10
         for ax, method in zip(axes, ("IMSTE", "UMAP")):
             Z = embeddings[name][method]
             ax.scatter(Z[:, 0], Z[:, 1], c=color_codes, cmap=cmap, norm=norm, s=point_size,
-                       alpha=point_alpha, linewidths=0)
+                       alpha=point_alpha, edgecolors="black", linewidths=0.15)
             note = f" (transform: {alignment[name]['transform']})" if method == "UMAP" else ""
             ax.set_title(f"{method}{note}")
             ax.set_xticks([])
@@ -310,15 +311,23 @@ def plot_cell_fate_stages(datasets, embeddings, *, point_size=10, point_alpha=0.
         stages = data.get("stage_order", list(dict.fromkeys(labels)))
         stages = [stage for stage in stages if stage in set(labels)]
         codes = np.asarray([stages.index(label) for label in labels])
-        palette = plt.get_cmap("tab10").colors
-        colors = [palette[i % len(palette)] for i in range(len(stages))]
+        paul_stage_colors = {
+            "Progenitor": "#D73027",
+            "Differentiating lineage": "#FFA500",
+            "Specialized cell": "#FFFFFF",
+        }
+        if all(stage in paul_stage_colors for stage in stages):
+            colors = [paul_stage_colors[stage] for stage in stages]
+        else:
+            positions = np.linspace(0.35, 0.9, len(stages)) if len(stages) > 1 else [0.65]
+            colors = plt.get_cmap("Oranges")(positions)
         cmap = ListedColormap(colors)
         norm = BoundaryNorm(np.arange(-0.5, len(stages) + 0.5), len(stages))
         fig, axes = plt.subplots(1, 2, figsize=(12, 4.7), constrained_layout=True)
         for ax, method in zip(axes, ("IMSTE", "UMAP")):
             Z = embeddings[name][method]
             ax.scatter(Z[:, 0], Z[:, 1], c=codes, cmap=cmap, norm=norm, s=point_size,
-                       alpha=point_alpha, linewidths=0)
+                       alpha=point_alpha, edgecolors="black", linewidths=0.15)
             ax.set_title(method)
             ax.set_xticks([])
             ax.set_yticks([])
@@ -328,7 +337,10 @@ def plot_cell_fate_stages(datasets, embeddings, *, point_size=10, point_alpha=0.
                    for i, stage in enumerate(stages)]
         fig.legend(handles=handles, title=data["stage_description"], loc="center left",
                    bbox_to_anchor=(1.01, 0.5), fontsize="small")
-        fig.suptitle(f"{name}: cell-fate stages / collection time")
+        fig.suptitle(f"{name}: {data['stage_description']}")
+        # The notebook explicitly displays returned figures; unregister them
+        # here to prevent Jupyter's end-of-cell auto-display from duplicating it.
+        plt.close(fig)
         figures[name] = fig
     return figures
 
