@@ -173,6 +173,7 @@ def run_high_dim_mst_gallery(
     mst_neighbors: int = 15,
     mst_inter_component_edges: int = 5,
     metric: str = "euclidean",
+    include_knn_attraction: bool = False,
     negative_ratio: int = 1,
     mst_max_neighbors: int | None = 15,
     mst_representatives_per_component: int = 10,
@@ -186,6 +187,7 @@ def run_high_dim_mst_gallery(
     plot_sample_images: bool = True,
     random_state: int = 42,
     device: str | None = None,
+    verbose: bool = False,
     plot_embeddings: bool = True,
     multilevel_init: bool = True,
     multilevel_reduction_ratio: int = 4,
@@ -270,6 +272,7 @@ def run_high_dim_mst_gallery(
                         mst_inter_component_edges=mst_inter_component_edges,
                         mst_representatives_per_component=mst_representatives_per_component,
                         metric=metric,
+                        include_knn_attraction=include_knn_attraction,
                         mst_max_neighbors=mst_max_neighbors,
                         negative_ratio=negative_ratio,
                         lambda_rep=lambda_rep,
@@ -280,6 +283,7 @@ def run_high_dim_mst_gallery(
                         pca_init_scaling=pca_init_scaling,
                         random_state=random_state,
                         device=resolved_device,
+                        verbose=verbose,
                         multilevel_init=multilevel_init,
                         multilevel_reduction_ratio=multilevel_reduction_ratio,
                         multilevel_base_size=multilevel_base_size,
@@ -329,6 +333,7 @@ def run_high_dim_mst_gallery(
                 "mst_neighbors": mst_neighbors,
                 "mst_inter_component_edges": mst_inter_component_edges,
                 "metric": metric,
+                "include_knn_attraction": include_knn_attraction,
                 "mst_max_neighbors": mst_max_neighbors,
                 "mst_representatives_per_component": mst_representatives_per_component,
                 "n_epochs": n_epochs,
@@ -364,6 +369,7 @@ def run_high_dim_mst_gallery(
                 "unique_graph_edges": len(estimator.graph_edges_),
                 "seconds": elapsed,
                 "device": estimator.device_,
+                "verbose": verbose,
             }
         )
 
