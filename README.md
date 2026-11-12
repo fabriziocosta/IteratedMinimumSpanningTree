@@ -276,6 +276,10 @@ error. The per-edge maximum and component pairs remain available for review.
 | `n_components` | `2` | Embedding dimensions |
 | `pca_init` | `True` | Initialize `fit(X)` with PCA on feature-wise standardized inputs; extra PCA dimensions are zero-filled |
 | `pca_init_scaling` | `"global"` | Apply one uniform scale to fit all PCA coordinates into `[-1, 1]`, or use `"none"` to preserve raw magnitudes |
+| `multilevel_init` | `False` | Opt into rank-only graph coarsening and coarse-to-fine initialization |
+| `multilevel_reduction_ratio` | `4` | Approximate number of nodes represented by each node per coarsening level |
+| `multilevel_base_size` | `1024` | Stop coarsening at or below this graph size |
+| `multilevel_epochs` | `10` | Refinement epochs at each coarsened graph level |
 | `n_epochs` | `200` | Coordinate-optimization epochs |
 | `batch_size` | `32768` | Maximum active edges per MPS update batch; ignored by CPU optimizer |
 | `learning_rate` | `0.05` | Coordinate optimizer learning rate |
@@ -310,6 +314,16 @@ embedding = mapper.fit_transform(X)
 ```
 The coordinate rows must correspond to `X` in the same order. Explicit
 coordinates take precedence over `pca_init` and are used at their supplied scale.
+
+Set `multilevel_init=True` to initialize from the fitted ranked graph instead.
+The initializer scores graph edges by inverse rank, coarsens each connected
+component independently, lays out the smallest graph from seeded random
+coordinates, then expands and refines the graph level by level. Coarse-level
+quotient edges use summed inverse-rank weights and run on the estimator's
+selected CPU or MPS optimizer. The final fit still uses the original graph and
+its normal rank scheduling. Explicit `init_coordinates` skip this process; if
+the graph cannot be reduced, the configured PCA or random initialization is
+used.
 
 The selected device is available as `mapper.device_` after fitting.
 `device="auto"` keeps graph construction and optimization on CPU. With

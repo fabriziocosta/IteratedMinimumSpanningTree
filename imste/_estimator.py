@@ -14,6 +14,11 @@ from sklearn.decomposition import PCA
 from sklearn.utils.validation import check_array, check_is_fitted
 
 from ._optimizer import optimize_embedding
+from ._multilevel import (
+    _canonical_edges,
+    build_multilevel_hierarchy,
+    expand_coordinates,
+)
 from .mst import build_mst_edges, iterated_graph_edges
 from .mst.prim import iterated_prim_distance_edges as _iterated_mst_edges
 
@@ -21,14 +26,20 @@ from .mst.prim import iterated_prim_distance_edges as _iterated_mst_edges
 def _positive_integer(name: str, value: object, *, allow_zero: bool = False) -> int:
     minimum = 0 if allow_zero else 1
     if isinstance(value, (bool, np.bool_)) or not isinstance(value, numbers.Integral):
-        raise ValueError(f"{name} must be an integer greater than or equal to {minimum}.")
+        raise ValueError(
+            f"{name} must be an integer greater than or equal to {minimum}."
+        )
     result = int(value)
     if result < minimum:
-        raise ValueError(f"{name} must be an integer greater than or equal to {minimum}.")
+        raise ValueError(
+            f"{name} must be an integer greater than or equal to {minimum}."
+        )
     return result
 
 
-def _finite_nonnegative(name: str, value: object, *, strictly_positive: bool = False) -> float:
+def _finite_nonnegative(
+    name: str, value: object, *, strictly_positive: bool = False
+) -> float:
     try:
         result = float(value)
     except (TypeError, ValueError) as exc:
@@ -79,14 +90,16 @@ def _standardized_pca_initialization(
             return np.asarray(scaled.T @ vector).ravel() - scaled_mean * np.sum(vector)
 
         def matmat(matrix):
-            return np.asarray(scaled @ matrix) - np.ones((n_samples, 1)) * (
-                scaled_mean @ matrix
-            )[None, :]
+            return (
+                np.asarray(scaled @ matrix)
+                - np.ones((n_samples, 1)) * (scaled_mean @ matrix)[None, :]
+            )
 
         def rmatmat(matrix):
-            return np.asarray(scaled.T @ matrix) - scaled_mean[:, None] * np.sum(
-                matrix, axis=0
-            )[None, :]
+            return (
+                np.asarray(scaled.T @ matrix)
+                - scaled_mean[:, None] * np.sum(matrix, axis=0)[None, :]
+            )
 
         centered_standardized = LinearOperator(
             shape=(n_samples, n_features),
@@ -177,7 +190,9 @@ def _sample_negative_targets(
         )
         candidates = np.flatnonzero(blocked == 0)
         if candidates.size == 0:
-            raise ValueError("Cannot sample a negative pair for a fully connected node.")
+            raise ValueError(
+                "Cannot sample a negative pair for a fully connected node."
+            )
         targets[source_indices] = rng.choice(candidates, size=source_indices.size)
     return targets
 
@@ -219,7 +234,9 @@ def _sample_sparse_negative_targets(
         candidates[blocked] = False
         available = np.flatnonzero(candidates)
         if available.size == 0:
-            raise ValueError("Cannot sample a negative pair for a fully connected node.")
+            raise ValueError(
+                "Cannot sample a negative pair for a fully connected node."
+            )
         targets[source_indices] = rng.choice(available, size=source_indices.size)
     return targets
 
@@ -254,6 +271,16 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
     init_coordinates : array-like of shape (n_samples, n_components), default=None
         Explicit starting coordinates for optimization. These take precedence
         over PCA and random initialization and must follow the input row order.
+    multilevel_init : bool, default=False
+        Initialize from a rank-only multilevel coarsening of the fitted graph.
+        Explicit ``init_coordinates`` take precedence. If coarsening makes no
+        progress, the configured PCA or seeded random initialization is used.
+    multilevel_reduction_ratio : int, default=4
+        Approximate reduction factor for each coarsening level.
+    multilevel_base_size : int, default=1024
+        Stop coarsening once a level has at most this many nodes.
+    multilevel_epochs : int, default=10
+        Refinement epochs at each coarsened level.
     n_epochs : int, default=200
         Number of optimization epochs.
     batch_size : int, default=32768
@@ -330,6 +357,10 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
         pca_init: bool = True,
         pca_init_scaling: str = "global",
         init_coordinates: object | None = None,
+        multilevel_init: bool = False,
+        multilevel_reduction_ratio: int = 4,
+        multilevel_base_size: int = 1024,
+        multilevel_epochs: int = 10,
     ) -> None:
         self.n_msts = n_msts
         self.n_components = n_components
@@ -353,6 +384,10 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
         self.mst_representatives_per_component = mst_representatives_per_component
         self.pca_init_scaling = pca_init_scaling
         self.init_coordinates = init_coordinates
+        self.multilevel_init = multilevel_init
+        self.multilevel_reduction_ratio = multilevel_reduction_ratio
+        self.multilevel_base_size = multilevel_base_size
+        self.multilevel_epochs = multilevel_epochs
 
     def _validated_fit_options(self) -> dict[str, object]:
         n_msts = _positive_integer("n_msts", self.n_msts)
@@ -369,6 +404,15 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
         representatives_per_component = _positive_integer(
             "mst_representatives_per_component",
             self.mst_representatives_per_component,
+        )
+        multilevel_reduction_ratio = _positive_integer(
+            "multilevel_reduction_ratio", self.multilevel_reduction_ratio
+        )
+        multilevel_base_size = _positive_integer(
+            "multilevel_base_size", self.multilevel_base_size
+        )
+        multilevel_epochs = _positive_integer(
+            "multilevel_epochs", self.multilevel_epochs, allow_zero=True
         )
         max_neighbors = (
             None
@@ -390,10 +434,12 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
         )
         if not isinstance(self.pca_init, (bool, np.bool_)):
             raise ValueError("pca_init must be a boolean.")
-        if (
-            not isinstance(self.pca_init_scaling, str)
-            or self.pca_init_scaling not in {"global", "none"}
-        ):
+        if not isinstance(self.multilevel_init, (bool, np.bool_)):
+            raise ValueError("multilevel_init must be a boolean.")
+        if not isinstance(self.pca_init_scaling, str) or self.pca_init_scaling not in {
+            "global",
+            "none",
+        }:
             raise ValueError("pca_init_scaling must be either 'global' or 'none'.")
         if self.device not in {"auto", "cpu", "mps"}:
             raise ValueError("device must be one of 'auto', 'cpu', or 'mps'.")
@@ -423,6 +469,10 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
             "logistic_margin": logistic_margin,
             "logistic_temperature": logistic_temperature,
             "pca_init": bool(self.pca_init),
+            "multilevel_init": bool(self.multilevel_init),
+            "multilevel_reduction_ratio": multilevel_reduction_ratio,
+            "multilevel_base_size": multilevel_base_size,
+            "multilevel_epochs": multilevel_epochs,
             "pca_init_scaling": self.pca_init_scaling,
             "resolved_device": resolved_device,
         }
@@ -453,7 +503,9 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
         embedding_started = time.perf_counter()
         rng = np.random.RandomState(self.random_state)
         seed = int(rng.randint(0, np.iinfo(np.int32).max))
-        pca_features = X_checked if initialization_features is None else initialization_features
+        pca_features = (
+            X_checked if initialization_features is None else initialization_features
+        )
         if initial_coordinates is not None:
             coordinates = check_array(
                 initial_coordinates, dtype=np.float64, ensure_2d=True
@@ -464,6 +516,19 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
                     f"({n_samples}, {n_components}); got {coordinates.shape}."
                 )
             coordinates = coordinates.astype(np.float32, copy=True)
+        elif options["multilevel_init"]:
+            coordinates = self._multilevel_initialization(
+                n_samples,
+                n_components,
+                edges,
+                tree_ranks,
+                resolved_device,
+                options,
+            )
+            if coordinates is None:
+                coordinates = self._default_initialization(
+                    rng, pca_features, n_samples, n_components, options
+                )
         elif pca_features is not None and options["pca_init"]:
             coordinates = _standardized_pca_initialization(
                 pca_features, n_components, self.random_state
@@ -536,6 +601,93 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
             self.graph_input_ = True
         self.fit_time_ = time.perf_counter() - fit_started
         return self
+
+    def _default_initialization(
+        self, rng, pca_features, n_samples, n_components, options
+    ):
+        if pca_features is not None and options["pca_init"]:
+            coordinates = _standardized_pca_initialization(
+                pca_features, n_components, self.random_state
+            )
+            return _scale_initialization_coordinates(
+                coordinates, options["pca_init_scaling"]
+            ).astype(np.float32)
+        return (rng.standard_normal((n_samples, n_components)) * 1e-3).astype(
+            np.float32
+        )
+
+    def _multilevel_initialization(
+        self, n_samples, n_components, edges, ranks, resolved_device, options
+    ):
+        levels = build_multilevel_hierarchy(
+            n_samples,
+            edges,
+            ranks,
+            reduction_ratio=options["multilevel_reduction_ratio"],
+            base_size=options["multilevel_base_size"],
+        )
+        if not levels:
+            return None
+
+        quotient_edges = np.asarray(edges, dtype=np.int64)
+        quotient_weights = 1.0 / np.asarray(ranks, dtype=np.float64)
+        n_nodes = n_samples
+        for labels, _, _ in levels:
+            n_nodes = int(labels.max()) + 1
+            if quotient_edges.size:
+                left, right = labels[quotient_edges[:, 0]], labels[quotient_edges[:, 1]]
+                crossing = left != right
+                quotient_edges, quotient_weights = _canonical_edges(
+                    np.column_stack((left[crossing], right[crossing])),
+                    quotient_weights[crossing],
+                )
+            else:
+                quotient_edges = np.empty((0, 2), dtype=np.int64)
+                quotient_weights = np.empty(0, dtype=np.float64)
+
+        seed_rng = np.random.RandomState(self.random_state)
+        coordinates = (seed_rng.standard_normal((n_nodes, n_components)) * 1e-3).astype(
+            np.float32
+        )
+        optimizer = optimize_embedding
+        if resolved_device == "mps":
+            from ._optimizer_mps import optimize_embedding_mps
+
+            optimizer = optimize_embedding_mps
+        for level_index in range(len(levels), -1, -1):
+            level_edges = quotient_edges if level_index == len(levels) else None
+            level_weights = quotient_weights if level_index == len(levels) else None
+            if level_index != len(levels):
+                labels, level_edges, level_weights = levels[level_index]
+                coordinates = expand_coordinates(
+                    labels,
+                    level_edges,
+                    level_weights,
+                    coordinates,
+                    random_state=None
+                    if self.random_state is None
+                    else self.random_state + level_index,
+                )
+            if level_edges.size and options["multilevel_epochs"]:
+                kwargs = dict(
+                    n_epochs=options["multilevel_epochs"],
+                    learning_rate=options["learning_rate"],
+                    negative_ratio=options["negative_ratio"],
+                    lambda_rep=options["lambda_rep"],
+                    epsilon=options["epsilon"],
+                    margin=options["logistic_margin"],
+                    temperature=options["logistic_temperature"],
+                    random_state=None
+                    if self.random_state is None
+                    else self.random_state + level_index,
+                    schedule_by_rank=False,
+                    edge_weights=level_weights,
+                )
+                if resolved_device == "mps":
+                    kwargs["batch_size"] = options["batch_size"]
+                ranks_at_level = np.ones(len(level_edges), dtype=np.int32)
+                optimizer(coordinates, level_edges, ranks_at_level, **kwargs)
+        return coordinates
 
     def fit(self, X: object, y: object = None) -> "IteratedMinimumSpanningTreeEmbedder":
         """Fit the embedding and store coordinates for the input rows.
@@ -628,7 +780,10 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
         options = self._validated_fit_options()
         if not sparse.issparse(distance_graph):
             raise ValueError("distance_graph must be a SciPy sparse matrix.")
-        if distance_graph.ndim != 2 or distance_graph.shape[0] != distance_graph.shape[1]:
+        if (
+            distance_graph.ndim != 2
+            or distance_graph.shape[0] != distance_graph.shape[1]
+        ):
             raise ValueError("distance_graph must be square.")
         if distance_graph.shape[0] < 2:
             raise ValueError("distance_graph must contain at least two samples.")
@@ -674,7 +829,9 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
     def transform(self, X: object) -> np.ndarray:
         """Return fitted coordinates for the exact training rows only."""
         if getattr(self, "graph_input_", False):
-            raise ValueError("transform(X) is unavailable after fit_graph(); use embedding_.")
+            raise ValueError(
+                "transform(X) is unavailable after fit_graph(); use embedding_."
+            )
         check_is_fitted(self, attributes=["embedding_", "X_fit_"])
         self._check_feature_names(X)
         X_checked = check_array(

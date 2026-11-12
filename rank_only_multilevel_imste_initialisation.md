@@ -1,87 +1,191 @@
 # Rank-only multilevel initialization for IMSTE
 
-## Aim
+## What it does
 
-Use the existing ranked IMSTE graph to build a useful initial layout quickly. Coarsening uses edge ranks only; it does not use the original input distances. This is a design proposal, not an implemented or evaluated feature.
+Multilevel initialization builds a starting layout by working from a small graph up to the full IMSTE graph. It uses the fitted graph's vertices, edges, and ranks. It does not use the input feature distances again during coarsening.
 
-## Graph and edge scores
+The feature is optional. With the default `multilevel_init=False`, initialization continues to use the existing PCA or seeded random path. If you provide `init_coordinates`, those coordinates always take precedence and multilevel initialization is skipped.
 
-Let the current graph be (G_0=(V_0,E_0)). For each edge (e=(i,j)) with rank (r_e), define its coarsening score as
+The process has two phases:
 
-\[
-a_e = \frac{1}{r_e}.
-\]
+1. Build smaller graphs by grouping nearby vertices and combining the weights of edges between groups.
+2. Layout the smallest graph, then expand its coordinates back to the full graph and refine each level.
 
-These are the inverse-rank weights used for IMSTE's positive-edge attraction. Input distances are not used during coarsening. See the [IMSTE white paper](WHITEPAPER.md) for the rank-weighted objective.
-
-## One coarsening level
-
-Given a graph with (N) vertices:
-
-1. **Set a target number of groups.** Start with (K=\lfloor N/4\rfloor), adjusted so that each connected component has at least one group and (K\geq K_{\min}). The reduction ratio and minimum size are tunable. (K) is a target number of supernodes; groups do not need to contain exactly four vertices.
-
-2. **Choose seed vertices.** Score each vertex by its weighted degree:
-   
-   \[
-   h(i)=\sum_{e\ni i} a_e.
-   \]
-   
-   Select about (K) high-scoring seeds, with at least one seed per connected component. When scores are similar, prefer seeds that are not all immediate neighbours, so one local region does not receive all the seeds.
-
-3. **Propagate group labels.** Give each seed a distinct group label. In rounds, each unlabelled vertex (i) totals the scores of its edges to already labelled neighbours in each group (C):
-   
-   \[
-   v(i,C)=\sum_{e=(i,j):\,j\in C} a_e.
-   \]
-   
-   Assign (i) to the group with the largest vote. Resolve ties deterministically, using a fixed vertex order or the random seed. Continue until all reachable vertices have labels or a round makes no assignments. Keep disconnected components separate; give any isolated or otherwise unassigned vertex its own group.
-
-4. **Build the quotient graph.** Each group becomes a supernode. For every pair of distinct groups (A,B), sum the scores of original edges crossing between them:
-   
-   \[
-   W_{AB}=\sum_{e=(i,j):\,i\in A,\,j\in B} a_e.
-   \]
-   
-   Drop internal edges from the coarse layout graph because their endpoints now share a coordinate. Keep the vertex-to-group map and each group's size. A rank histogram can be retained for diagnostics; (W_{AB}) is an aggregate attraction weight, not a newly computed MST rank.
-
-## Recursive layout and expansion
-
-Repeat coarsening until the graph has at most a chosen base size. Initialize and lay out that smallest graph using its aggregated attraction weights, then expand one level at a time.
-
-For each fine-level vertex (i) in group (C), let (y_C) be its group's coarse coordinate. Estimate a local position from the coordinates of neighbouring groups:
-
-\[
-\bar y_i =
-\frac{\sum_{e=(i,j),\,g(j)\ne C} a_e\,y_{g(j)}}
-     {\sum_{e=(i,j),\,g(j)\ne C} a_e}.
-\]
-
-If the denominator is nonzero, initialize (y_i=\tfrac12(y_C+\bar y_i)). Otherwise, place it near (y_C) with a small seeded offset. Run a short refinement at this level, then expand to the next finer level. At the finest level, refine with the original vertices, edges, ranks, and existing IMSTE objective.
-
-## Pseudocode
-
-```text
-levels = [original_ranked_graph]
-while number_of_vertices(levels[-1]) > base_size:
-    G = levels[-1]
-    K = target_group_count(G, reduction_ratio, base_size)
-    seeds = choose_high_weighted_degree_seeds(G, K, one_per_component=True)
-    labels = propagate_labels(G, seeds, edge_score=1/rank)
-    levels.append(aggregate_cross_group_edges(G, labels, score=sum(1/rank)))
-
-Y = initialise_and_layout(levels[-1])
-for each finer level G in reverse(levels):
-    Y = expand_from_group_and_neighbour_coordinates(G, Y, edge_score=1/rank)
-    Y = short_refinement(G, Y)
-Y = full_IMSTE_refinement(original_ranked_graph, Y)
+```mermaid
+flowchart TD
+    A[Build the ranked IMSTE graph] --> B{Explicit init_coordinates supplied?}
+    B -- Yes --> C[Use those coordinates]
+    B -- No --> D{multilevel_init enabled?}
+    D -- No --> E[Use existing PCA or random start]
+    D -- Yes --> F[Coarsen the ranked graph]
+    F --> G{Any level reduced the graph?}
+    G -- No --> E
+    G -- Yes --> H[Layout the smallest graph]
+    H --> I[Expand and refine through finer levels]
+    I --> J[Run the normal final IMSTE fit]
+    C --> J
+    E --> J
 ```
 
-## Initial experiment
+## Settings
 
-Start with a reduction ratio of four and a conservative base size. Compare the resulting initialization with the current PCA and random starts, using the same original IMSTE graph, optimizer settings, final epoch budget, and matched random seeds where applicable. Record initialization cost, objective before and after refinement, epochs to reach a target objective, neighbourhood preservation, and a global-structure measure.
+| Setting | Default | Purpose |
+| --- | ---: | --- |
+| `multilevel_init` | `False` | Enable the multilevel starting layout |
+| `multilevel_reduction_ratio` | `4` | Target roughly one group for every four current vertices per level |
+| `multilevel_base_size` | `1024` | Stop coarsening when the graph has this many vertices or fewer |
+| `multilevel_epochs` | `10` | Refine the layout for this many epochs at each coarse or expanded level |
 
-This rank-only design gives every rank-one edge the same coarsening score, including long bridges. Measure whether that leads to undesirable merges before treating the method as useful.
+The final optimization still uses the estimator's usual `n_epochs`, original ranked graph, and rank schedule. Multilevel epochs are additional work that prepares its initial coordinates.
 
-## Relation to UMAP
+## Step 1: Give each graph edge a score
 
-UMAP's recursive initialization uses hub-seeded label propagation and recursively expands and refines its embedding. This proposal adapts that coarsening pattern to IMSTE's inverse-rank edge scores; it does not use UMAP's fuzzy graph weights. See the [UMAP recursive initialization documentation](https://umap-learn.readthedocs.io/en/latest/api.html#recursive-initialization).
+For an edge with rank $r_e$, the score is its inverse rank:
+
+$$
+a_e = \frac{1}{r_e}
+$$
+
+A rank-one edge therefore has score $1$, a rank-two edge has score $1/2$, and so on. These scores guide the grouping and the coarse layouts. Original feature distances are not consulted during these steps.
+
+## Step 2: Decide how many groups to make
+
+Suppose the current graph has $N$ vertices and its connected components are already known. The target number of groups is roughly $\lceil N/q\rceil$, where $q$ is `multilevel_reduction_ratio`. The target is raised when necessary so every connected component can have at least one group.
+
+The target is a guide. The number of groups can be higher if several disconnected components need separate groups. If every vertex must remain in its own group, that level did not reduce the graph and coarsening stops.
+
+## Step 3: Pick seed vertices
+
+The algorithm gives each vertex a weighted degree: add up the scores of its incident edges.
+
+$$
+h(i) = \sum_{e\ni i} a_e
+$$
+
+It visits vertices in descending weighted-degree order, breaking ties by vertex number. It prefers a seed that is not directly connected to a seed already selected. This spreads seeds across the graph. If that preference does not produce enough seeds, it fills the remaining slots in the same deterministic order. It also adds a seed to any connected component that still has none.
+
+Each seed starts one group. Seeds are sorted before group numbers are assigned, so later tie-breaking is repeatable.
+
+## Step 4: Grow the groups by label propagation
+
+Every vertex starts with the label of its seed, or with no label yet. Propagation happens in rounds. In each round, an unlabelled vertex looks at its already-labelled neighbours and totals the edge scores belonging to each neighbour group:
+
+$$
+v(i,C) = \sum_{e=(i,j):\,j\in C} a_e
+$$
+
+The vertex joins the group with the largest total. If totals tie, it joins the group with the lower group number. Updates in a round are synchronous: a vertex only sees labels that existed before that round began. This makes the result deterministic and lets labels spread out from the seeds in an orderly way.
+
+Because each connected component gets a seed and there are no edges between components, a label cannot cross from one component to another.
+
+## Step 5: Make the smaller, quotient graph
+
+Each group becomes one vertex in the smaller graph. Edges whose endpoints now belong to the same group are dropped. For every pair of different groups, the algorithm adds up the scores of all edges crossing between them:
+
+$$
+W_{AB} = \sum_{e=(i,j):\,i\in A,\,j\in B} a_e
+$$
+
+The result, $W_{AB}$, is a direct attraction weight for the quotient edge. It is not a newly calculated MST rank.
+
+```mermaid
+graph LR
+    subgraph Fine[Fine graph]
+        a((a)) ---|"0.5"| b((b))
+        b ---|"1.0"| c((c))
+        c ---|"0.25"| d((d))
+        a ---|"0.5"| c
+    end
+    subgraph Groups[Groups]
+        A((Group A: a, b))
+        B((Group B: c, d))
+    end
+    subgraph Quotient[Quotient graph]
+        QA((A)) ---|"1.5: sum of crossing scores"| QB((B))
+    end
+    Fine -. "propagate labels" .-> Groups
+    Groups -. "sum cross-group edges" .-> Quotient
+```
+
+The figure is schematic: all crossing edges between groups are combined into one weighted edge. Internal edges do not appear in the quotient graph.
+
+## Step 6: Repeat coarsening until it should stop
+
+The quotient graph becomes the input to the next coarsening level. The same steps repeat until either:
+
+- the current graph has `multilevel_base_size` vertices or fewer; or
+- a level cannot reduce the number of vertices.
+
+If no level reduced the original graph, the estimator uses its regular PCA or random initialization instead. If one or more levels did reduce it but a later level cannot, it uses the smallest graph reached so far.
+
+```mermaid
+flowchart LR
+    L0[Original graph] -->|coarsen| L1[Smaller graph]
+    L1 -->|coarsen| L2[Smallest graph reached]
+    L2 -->|stop at base size or no progress| Layout[Seeded random coordinates]
+    Layout --> R2[Refine smallest graph]
+    R2 -->|expand| R1[Refine next graph]
+    R1 -->|expand| R0[Use full graph coordinates]
+```
+
+## Step 7: Lay out the smallest graph
+
+The smallest graph starts from seeded random coordinates. Its weighted quotient edges are optimized for `multilevel_epochs`. At each coarse level, the CPU or MPS optimizer selected by the estimator uses the direct quotient edge weights, normalized by their total weight.
+
+If the smallest graph has no edges, there is nothing to optimize at that level; the coordinate expansion steps still proceed.
+
+## Step 8: Expand coordinates to the next finer graph
+
+The algorithm moves from a coarse graph back to the graph level that produced it. Each fine vertex already knows the group it belongs to. For that vertex, the algorithm looks across its edges to neighbouring groups and takes a weighted average of those groups' coordinates. Let $w_e$ be the edge's weight at the current level: inverse rank on the original graph, or the summed quotient weight on a coarser graph.
+
+$$
+\bar y_i = \frac{\sum_{e=(i,j),\,g(j)\ne g(i)} w_e\,y_{g(j)}}{\sum_{e=(i,j),\,g(j)\ne g(i)} w_e}
+$$
+
+Here, $g(i)$ is the group containing vertex $i$, and $y_{g(j)}$ is the current coordinate of a neighbouring group. When at least one external group neighbour exists, this average becomes the vertex's initial coordinate. If there are no external group neighbours, the vertex starts close to its own group's coordinate, with small seeded jitter scaled to the current layout.
+
+Then the optimizer refines that finer graph for `multilevel_epochs`. The same expansion and refinement steps repeat until coordinates exist for every original vertex.
+
+```mermaid
+flowchart TD
+    A[Coarse group coordinates] --> B[For each fine vertex, inspect crossing edges]
+    B --> C{Has a neighbouring group?}
+    C -- Yes --> D[Weighted average of neighbouring group coordinates]
+    C -- No --> E[Own group coordinate plus small seeded jitter]
+    D --> F[Refine the fine graph]
+    E --> F
+    F --> G{More detailed graph levels?}
+    G -- Yes --> B
+    G -- No --> H[Use expanded coordinates as final-fit start]
+```
+
+## Step 9: Run the usual IMSTE optimization
+
+The expanded coordinates initialize the estimator's regular final optimization. That fit uses the original vertices, edges, and ranks. It also keeps the existing rank scheduling and the caller's `n_epochs`; coarse graph weights do not replace or alter the final ranked objective.
+
+## Try it
+
+```python
+from imste import IteratedMinimumSpanningTreeEmbedder
+
+mapper = IteratedMinimumSpanningTreeEmbedder(
+    n_msts=4,
+    multilevel_init=True,
+    multilevel_reduction_ratio=4,
+    multilevel_base_size=1024,
+    multilevel_epochs=10,
+    n_epochs=400,
+    random_state=42,
+)
+embedding = mapper.fit_transform(X)
+```
+
+To start from explicit coordinates instead, provide `init_coordinates`. This takes precedence even when `multilevel_init=True`.
+
+## Notebook comparison
+
+Notebook 03 compares three layouts: the UMAP reference, IMSTE initialized from the already computed UMAP coordinates, and IMSTE initialized through this multilevel process. The two IMSTE fits use matching graph and final optimizer settings, so the starting strategy is the intended comparison.
+
+## How this relates to UMAP
+
+UMAP's recursive initialization also groups vertices, lays out a smaller graph, and expands coordinates to finer graphs. This implementation uses that general pattern, but derives its graph scores from IMSTE ranks. It does not use UMAP's fuzzy graph weights. See the [UMAP recursive initialization documentation](https://umap-learn.readthedocs.io/en/latest/api.html#recursive-initialization).

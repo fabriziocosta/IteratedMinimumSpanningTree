@@ -34,11 +34,7 @@ def _sample_negative_targets_mps(
     if negative_ratio == 0:
         return torch.empty((n_edges, 2, 0), dtype=torch.long, device="mps")
 
-    sources = (
-        active_pairs.unsqueeze(2)
-        .expand(n_edges, 2, negative_ratio)
-        .reshape(-1)
-    )
+    sources = active_pairs.unsqueeze(2).expand(n_edges, 2, negative_ratio).reshape(-1)
     eligible = degree.index_select(0, sources) < n_samples - 1
     generator = torch.Generator(device="mps")
     generator.manual_seed(seed)
@@ -105,6 +101,7 @@ def optimize_embedding_mps(
     temperature: float,
     random_state: int | None,
     schedule_by_rank: bool = True,
+    edge_weights: np.ndarray | None = None,
     progress_callback=None,
     timing_callback: Callable[[float, float], None] | None = None,
 ) -> None:
@@ -118,8 +115,26 @@ def optimize_embedding_mps(
     n_samples = embedding.shape[0]
     edge_pairs = np.asarray(edges, dtype=np.int64)
     ranks = np.asarray(tree_ranks, dtype=np.int64)
+    direct_weights = (
+        np.ones(len(edge_pairs), dtype=np.float32)
+        if edge_weights is None
+        else np.asarray(edge_weights, dtype=np.float32)
+    )
+    if (
+        direct_weights.shape != (len(edge_pairs),)
+        or not np.isfinite(direct_weights).all()
+        or np.any(direct_weights <= 0)
+    ):
+        raise ValueError(
+            "edge_weights must contain one finite positive value per edge."
+        )
+    use_edge_weights = edge_weights is not None
     phases = rank_phases(ranks, random_state)
-    expected_active_edges = expected_active_edge_count(ranks)
+    expected_active_edges = (
+        float(np.sum(direct_weights))
+        if use_edge_weights
+        else expected_active_edge_count(ranks)
+    )
     max_rank = int(np.max(ranks)) if ranks.size else 0
     rank_counts = np.bincount(ranks, minlength=max_rank + 1)
     rank_offsets = np.cumsum(rank_counts, dtype=np.int64)
@@ -138,6 +153,7 @@ def optimize_embedding_mps(
     coordinates = torch.as_tensor(embedding, dtype=torch.float32, device=device)
     edge_tensor = torch.as_tensor(edge_pairs, dtype=torch.long, device=device)
     rank_tensor = torch.as_tensor(ranks, dtype=torch.float32, device=device)
+    weight_tensor = torch.as_tensor(direct_weights, dtype=torch.float32, device=device)
     degree_tensor = torch.as_tensor(degree, dtype=torch.long, device=device)
     adjacency_keys = torch.as_tensor(
         adjacency_keys_cpu, dtype=torch.long, device=device
@@ -195,16 +211,23 @@ def optimize_embedding_mps(
             left = active_pairs[:, 0]
             right = active_pairs[:, 1]
 
-            alpha = learning_rate * (5.0 * n_samples) * (
-                1.0 - epoch / max(1, n_epochs)
+            alpha = learning_rate * (5.0 * n_samples) * (1.0 - epoch / max(1, n_epochs))
+            normalizer = (
+                expected_active_edges
+                if use_edge_weights
+                else max(1.0, expected_active_edges)
             )
-            positive_scale = (1.0 - lambda_rep) / max(1.0, expected_active_edges)
+            positive_scale = (1.0 - lambda_rep) / normalizer
             negative_scale = lambda_rep / max(1, negative_count)
             updates = torch.zeros_like(coordinates)
 
-            delta = coordinates.index_select(0, left) - coordinates.index_select(0, right)
+            delta = coordinates.index_select(0, left) - coordinates.index_select(
+                0, right
+            )
             d2 = torch.sum(delta * delta, dim=1)
-            if schedule_by_rank:
+            if use_edge_weights:
+                edge_weight = weight_tensor.index_select(0, active_tensor)
+            elif schedule_by_rank:
                 edge_weight = torch.ones_like(d2)
             else:
                 edge_weight = torch.reciprocal(
@@ -249,12 +272,14 @@ def optimize_embedding_mps(
     if timing_callback is not None:
         if use_device_events:
             try:
-                sampling_seconds = sum(
-                    start.elapsed_time(end) for start, end in sampling_events
-                ) / 1000.0
-                update_seconds = sum(
-                    start.elapsed_time(end) for start, end in update_events
-                ) / 1000.0
+                sampling_seconds = (
+                    sum(start.elapsed_time(end) for start, end in sampling_events)
+                    / 1000.0
+                )
+                update_seconds = (
+                    sum(start.elapsed_time(end) for start, end in update_events)
+                    / 1000.0
+                )
             except RuntimeError:
                 # Some PyTorch MPS builds can return out-of-order timestamps
                 # for recorded events. Timing is diagnostic only, so preserve

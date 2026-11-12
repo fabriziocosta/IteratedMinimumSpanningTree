@@ -177,19 +177,27 @@ def run_high_dim_mst_gallery(
     mst_max_neighbors: int | None = 15,
     lambda_rep: float = 0.5,
     sample_plot_rows: int = 2,
+    plot_sample_images: bool = True,
     random_state: int = 42,
     device: str | None = None,
     plot_embeddings: bool = True,
+    multilevel_init: bool = True,
+    multilevel_reduction_ratio: int = 4,
+    multilevel_base_size: int = 1024,
+    multilevel_epochs: int = 10,
 ) -> dict[str, object]:
     """Fit and display 2D IMSTE embeddings for several image datasets.
 
     Dataset loading, normalization, and fitting happen here so the notebook
     can remain a thin launcher. Failed remote dataset loads are reported and
     skipped. Set ``plot_embeddings=False`` to leave embedding plots to the
-    caller, for example when comparing multiple methods side by side. Sample
-    image grids are displayed either way. ``negative_ratio`` controls sampled
+    caller, for example when comparing multiple methods side by side. Set
+    ``plot_sample_images=False`` to skip the per-class image grids.
+    ``negative_ratio`` controls sampled
     non-neighbors per endpoint of a positive edge, and ``mst_max_neighbors``
-    caps FAMST's approximate-neighbor search.
+    caps FAMST's approximate-neighbor search. Multilevel initialization is
+    enabled by default for this gallery and can be configured with the
+    ``multilevel_*`` options.
     """
     if max_samples < 10:
         raise ValueError("max_samples must be at least 10.")
@@ -207,13 +215,14 @@ def run_high_dim_mst_gallery(
     embeddings = {}
     summaries = []
     for name, (X, labels) in datasets.items():
-        _plot_dataset_examples(
-            name,
-            X,
-            labels,
-            n_rows=int(sample_plot_rows),
-            random_state=random_state,
-        )
+        if plot_sample_images:
+            _plot_dataset_examples(
+                name,
+                X,
+                labels,
+                n_rows=int(sample_plot_rows),
+                random_state=random_state,
+            )
         print(
             f"Fitting {name} with {mst_method.upper()} on {resolved_device} ...",
             flush=True,
@@ -234,6 +243,10 @@ def run_high_dim_mst_gallery(
                         lambda_rep=lambda_rep,
                         random_state=random_state,
                         device=resolved_device,
+                        multilevel_init=multilevel_init,
+                        multilevel_reduction_ratio=multilevel_reduction_ratio,
+                        multilevel_base_size=multilevel_base_size,
+                        multilevel_epochs=multilevel_epochs,
                     ),
                 ),
             ]
@@ -264,6 +277,10 @@ def run_high_dim_mst_gallery(
                 "n_epochs": n_epochs,
                 "negative_ratio": negative_ratio,
                 "lambda_rep": lambda_rep,
+                "multilevel_init": multilevel_init,
+                "multilevel_reduction_ratio": multilevel_reduction_ratio,
+                "multilevel_base_size": multilevel_base_size,
+                "multilevel_epochs": multilevel_epochs,
                 "unique_graph_edges": len(estimator.graph_edges_),
                 "seconds": elapsed,
                 "device": estimator.device_,

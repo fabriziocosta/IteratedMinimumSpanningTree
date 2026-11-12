@@ -43,11 +43,13 @@ def test_fit_timing_diagnostics_are_finite_and_bounded():
         n_msts=1, n_epochs=0, random_state=5
     ).fit(small_data())
 
-    timings = np.array([
-        estimator.graph_construction_time_,
-        estimator.embedding_optimization_time_,
-        estimator.fit_time_,
-    ])
+    timings = np.array(
+        [
+            estimator.graph_construction_time_,
+            estimator.embedding_optimization_time_,
+            estimator.fit_time_,
+        ]
+    )
     assert np.isfinite(timings).all()
     assert np.all(timings >= 0)
     assert estimator.graph_construction_time_ <= estimator.fit_time_
@@ -80,9 +82,7 @@ def test_seed_reproduces_embedding():
 
 
 def test_default_pca_initialization_globally_scales_standardized_dense_pca():
-    X = np.array(
-        [[0.0, 3.0, 4.0], [1.0, 1.0, 2.0], [2.0, 0.0, 1.0], [4.0, 2.0, 0.0]]
-    )
+    X = np.array([[0.0, 3.0, 4.0], [1.0, 1.0, 2.0], [2.0, 0.0, 1.0], [4.0, 2.0, 0.0]])
     estimator = IteratedMinimumSpanningTreeEmbedder(
         n_msts=1, n_epochs=0, mst_method="prim", random_state=12
     ).fit(X)
@@ -91,16 +91,16 @@ def test_default_pca_initialization_globally_scales_standardized_dense_pca():
 
     standardized = (X - X.mean(axis=0)) / X.std(axis=0)
     pca_scores = PCA(n_components=2, svd_solver="full").fit_transform(standardized)
-    expected = _scale_initialization_coordinates(
-        pca_scores, scaling="global"
-    )
+    expected = _scale_initialization_coordinates(pca_scores, scaling="global")
     assert estimator.pca_init_scaling == "global"
     np.testing.assert_allclose(estimator.embedding_, expected, atol=1e-6)
     np.testing.assert_array_equal(
         estimator.embedding_,
         IteratedMinimumSpanningTreeEmbedder(
             n_msts=1, n_epochs=0, mst_method="prim", random_state=12
-        ).fit(X).embedding_,
+        )
+        .fit(X)
+        .embedding_,
     )
 
 
@@ -125,9 +125,9 @@ def test_pca_init_scaling_can_preserve_raw_pca_magnitudes():
     np.testing.assert_allclose(raw_pca.embedding_, pca_scores, atol=1e-6)
     expected_rng = np.random.RandomState(6)
     expected_rng.randint(0, np.iinfo(np.int32).max)
-    expected_random = (
-        expected_rng.standard_normal((len(X), 2)) * 1e-3
-    ).astype(np.float32)
+    expected_random = (expected_rng.standard_normal((len(X), 2)) * 1e-3).astype(
+        np.float32
+    )
     np.testing.assert_array_equal(random_init.embedding_, expected_random)
 
 
@@ -176,6 +176,42 @@ def test_pca_init_false_preserves_seeded_random_initialization():
     expected = (rng.standard_normal((len(small_data()), 2)) * 1e-3).astype(np.float32)
 
     np.testing.assert_array_equal(estimator.embedding_, expected)
+
+
+def test_multilevel_initialization_returns_finite_embedding():
+    estimator = IteratedMinimumSpanningTreeEmbedder(
+        n_msts=1,
+        n_epochs=2,
+        multilevel_init=True,
+        multilevel_base_size=2,
+        multilevel_epochs=2,
+        mst_method="prim",
+        negative_ratio=0,
+        random_state=11,
+    ).fit(small_data())
+    assert estimator.embedding_.shape == (len(small_data()), 2)
+    assert np.isfinite(estimator.embedding_).all()
+
+
+def test_explicit_coordinates_take_precedence_over_multilevel(monkeypatch):
+    coordinates = np.arange(len(small_data()) * 2, dtype=float).reshape(-1, 2)
+
+    def fail_if_called(*args, **kwargs):
+        raise AssertionError("explicit coordinates must skip multilevel initialization")
+
+    monkeypatch.setattr(
+        IteratedMinimumSpanningTreeEmbedder,
+        "_multilevel_initialization",
+        fail_if_called,
+    )
+    estimator = IteratedMinimumSpanningTreeEmbedder(
+        n_msts=1,
+        n_epochs=0,
+        multilevel_init=True,
+        init_coordinates=coordinates,
+        mst_method="prim",
+    ).fit(small_data())
+    np.testing.assert_array_equal(estimator.embedding_, coordinates.astype(np.float32))
 
 
 def test_fit_graph_uses_random_initialization_with_default_pca_option():
@@ -287,7 +323,9 @@ def test_inductive_mlp_stops_after_patience_once_minimum_epochs_are_met(monkeypa
 
 def test_duplicate_samples_keep_zero_distance_mst_edges():
     X = np.array([[0.0, 0.0], [0.0, 0.0], [1.0, 0.0], [0.0, 1.0]])
-    estimator = IteratedMinimumSpanningTreeEmbedder(n_msts=1, n_epochs=2, random_state=2).fit(X)
+    estimator = IteratedMinimumSpanningTreeEmbedder(
+        n_msts=1, n_epochs=2, random_state=2
+    ).fit(X)
     assert estimator.graph_edges_.shape == (len(X) - 1, 2)
     assert np.isfinite(estimator.embedding_).all()
 
@@ -333,7 +371,9 @@ def test_fit_graph_reuses_edges_and_preserves_disconnected_components():
 
     assert estimator.graph_edges_.shape == (6, 2)
     assert estimator.graph_ranks_.tolist() == [1, 1, 1, 2, 2, 2]
-    assert np.all(estimator.graph_edges_[:, 0] // 3 == estimator.graph_edges_[:, 1] // 3)
+    assert np.all(
+        estimator.graph_edges_[:, 0] // 3 == estimator.graph_edges_[:, 1] // 3
+    )
     assert estimator.embedding_.shape == (6, 2)
 
 
@@ -354,13 +394,15 @@ def test_fit_graph_uses_minimum_reciprocal_distance_and_one_way_edges():
 
 def test_fit_graph_keeps_explicit_zero_distance_edges():
     graph = sparse.coo_matrix(
-        (np.array([0.0, 0.0, 2.0, 2.0]),
-         (np.array([0, 1, 1, 2]), np.array([1, 0, 2, 1]))),
+        (
+            np.array([0.0, 0.0, 2.0, 2.0]),
+            (np.array([0, 1, 1, 2]), np.array([1, 0, 2, 1])),
+        ),
         shape=(3, 3),
     )
-    estimator = IteratedMinimumSpanningTreeEmbedder(
-        n_msts=1, n_epochs=0
-    ).fit_graph(graph)
+    estimator = IteratedMinimumSpanningTreeEmbedder(n_msts=1, n_epochs=0).fit_graph(
+        graph
+    )
 
     assert estimator.graph_edges_.tolist() == [[0, 1], [1, 2]]
 
@@ -392,7 +434,9 @@ def test_famst_reuses_a_bottleneck_edge_when_more_trees_are_requested():
 
 def test_no_eligible_negative_pairs_is_supported():
     X = np.array([[0.0], [1.0]])
-    estimator = IteratedMinimumSpanningTreeEmbedder(n_msts=1, n_epochs=2, random_state=3).fit(X)
+    estimator = IteratedMinimumSpanningTreeEmbedder(
+        n_msts=1, n_epochs=2, random_state=3
+    ).fit(X)
     assert estimator.embedding_.shape == (2, 2)
     assert np.isfinite(estimator.embedding_).all()
 

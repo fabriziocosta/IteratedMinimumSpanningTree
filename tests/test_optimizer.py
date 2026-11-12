@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 import torch
 
 from imste._optimizer import (
@@ -37,9 +38,10 @@ def test_repulsion_gradient_matches_torch_autograd():
         d2 = torch.sum(delta * delta)
         loss = torch.nn.functional.softplus((margin - d2) / temperature)
         gradient = torch.autograd.grad(loss, points)[0][0].numpy()
-        explicit = _repulsion_factor(
-            float(d2.detach()), margin, temperature
-        ) * -delta.detach().numpy()
+        explicit = (
+            _repulsion_factor(float(d2.detach()), margin, temperature)
+            * -delta.detach().numpy()
+        )
         np.testing.assert_allclose(explicit, gradient, rtol=1e-12, atol=1e-12)
 
 
@@ -113,10 +115,7 @@ def test_exact_prim_uses_all_edges_with_explicit_inverse_rank_weights():
         delta = expected[left] - expected[right]
         d2 = float(np.dot(delta, delta))
         factor = (
-            alpha
-            * (1.0 / normalizer)
-            * (1.0 / rank)
-            * _attraction_factor(d2, 1e-4)
+            alpha * (1.0 / normalizer) * (1.0 / rank) * _attraction_factor(d2, 1e-4)
         )
         expected[left] -= factor * delta
         expected[right] += factor * delta
@@ -137,6 +136,65 @@ def test_exact_prim_uses_all_edges_with_explicit_inverse_rank_weights():
         schedule_by_rank=False,
     )
     np.testing.assert_allclose(embedding, expected, rtol=1e-6, atol=1e-7)
+
+
+def test_optimizer_accepts_direct_positive_weights_normalized_by_total():
+    embedding = np.array(
+        [[0.0, 0.0], [1.0, 0.5], [2.0, -1.0], [-1.0, 2.0]], dtype=np.float32
+    )
+    initial = embedding.astype(np.float64)
+    edges = np.array([[0, 1], [2, 3]], dtype=np.intp)
+    weights = np.array([2.0, 1.0])
+    expected = initial.copy()
+    alpha = 0.01 * 5 * len(embedding)
+    for (left, right), weight in zip(edges, weights):
+        delta = expected[left] - expected[right]
+        d2 = float(np.dot(delta, delta))
+        factor = alpha * (weight / weights.sum()) * _attraction_factor(d2, 1e-4)
+        expected[left] -= factor * delta
+        expected[right] += factor * delta
+    expected -= expected.mean(axis=0)
+
+    optimize_embedding(
+        embedding,
+        edges,
+        np.ones(len(edges), dtype=np.int32),
+        n_epochs=1,
+        learning_rate=0.01,
+        negative_ratio=0,
+        lambda_rep=0.0,
+        epsilon=1e-4,
+        margin=1.0,
+        temperature=0.5,
+        random_state=4,
+        schedule_by_rank=False,
+        edge_weights=weights,
+    )
+    np.testing.assert_allclose(embedding, expected, rtol=1e-6, atol=1e-7)
+
+
+@pytest.mark.skipif(not torch.backends.mps.is_available(), reason="MPS is unavailable")
+def test_mps_optimizer_accepts_direct_edge_weights():
+    from imste._optimizer_mps import optimize_embedding_mps
+
+    embedding = np.array([[0.0, 0.0], [1.0, 0.5], [2.0, -1.0]], dtype=np.float32)
+    optimize_embedding_mps(
+        embedding,
+        np.array([[0, 1], [1, 2]], dtype=np.int64),
+        np.ones(2, dtype=np.int32),
+        n_epochs=2,
+        batch_size=2,
+        learning_rate=0.001,
+        negative_ratio=0,
+        lambda_rep=0.0,
+        epsilon=1e-4,
+        margin=1.0,
+        temperature=0.5,
+        random_state=9,
+        schedule_by_rank=False,
+        edge_weights=np.array([2.0, 1.0]),
+    )
+    assert np.isfinite(embedding).all()
 
 
 def test_optimizer_is_seeded_and_supports_arbitrary_dimensions():

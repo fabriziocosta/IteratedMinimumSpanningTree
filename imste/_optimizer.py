@@ -187,6 +187,8 @@ def _apply_epoch_updates(
     epsilon: float,
     margin: float,
     temperature: float,
+    edge_weights: np.ndarray,
+    use_edge_weights: bool,
 ) -> None:
     n_samples, n_components = embedding.shape
     # The mean-loss normalization divides per-coordinate updates by the graph
@@ -194,7 +196,10 @@ def _apply_epoch_updates(
     # usable per-sample step size as datasets grow. The factor of five was
     # calibrated against the former Adam default on representative embeddings.
     alpha = learning_rate * (5.0 * n_samples) * (1.0 - epoch / max(1, n_epochs))
-    positive_scale = (1.0 - lambda_rep) / max(1.0, expected_active_edges)
+    normalizer = (
+        expected_active_edges if use_edge_weights else max(1.0, expected_active_edges)
+    )
+    positive_scale = (1.0 - lambda_rep) / normalizer
     negative_scale = lambda_rep / max(1, negative_count)
 
     for item in range(len(active)):
@@ -205,7 +210,10 @@ def _apply_epoch_updates(
         for component in range(n_components):
             delta = embedding[left, component] - embedding[right, component]
             d2 += delta * delta
-        edge_weight = 1.0 / tree_ranks[edge_index] if not schedule_by_rank else 1.0
+        if use_edge_weights:
+            edge_weight = edge_weights[edge_index]
+        else:
+            edge_weight = 1.0 / tree_ranks[edge_index] if not schedule_by_rank else 1.0
         attraction_factor = (
             alpha * positive_scale * edge_weight * _attraction_factor(d2, epsilon)
         )
@@ -252,6 +260,7 @@ def optimize_embedding(
     temperature: float,
     random_state: int | None,
     schedule_by_rank: bool = True,
+    edge_weights: np.ndarray | None = None,
     progress_callback=None,
     timing_callback: Callable[[float, float], None] | None = None,
 ) -> None:
@@ -259,8 +268,26 @@ def optimize_embedding(
     n_samples = embedding.shape[0]
     edge_pairs = np.asarray(edges, dtype=np.int64)
     ranks = np.asarray(tree_ranks, dtype=np.int64)
+    direct_weights = (
+        np.ones(len(edge_pairs), dtype=np.float64)
+        if edge_weights is None
+        else np.asarray(edge_weights, dtype=np.float64)
+    )
+    if (
+        direct_weights.shape != (len(edge_pairs),)
+        or not np.isfinite(direct_weights).all()
+        or np.any(direct_weights <= 0)
+    ):
+        raise ValueError(
+            "edge_weights must contain one finite positive value per edge."
+        )
+    use_edge_weights = edge_weights is not None
     phases = rank_phases(ranks, random_state)
-    expected_active_edges = expected_active_edge_count(ranks)
+    expected_active_edges = (
+        float(np.sum(direct_weights))
+        if use_edge_weights
+        else expected_active_edge_count(ranks)
+    )
     max_rank = int(np.max(ranks)) if ranks.size else 0
     rank_counts = np.bincount(ranks, minlength=max_rank + 1)
     rank_offsets = np.cumsum(rank_counts, dtype=np.int64)
@@ -319,6 +346,8 @@ def optimize_embedding(
             epsilon,
             margin,
             temperature,
+            direct_weights,
+            use_edge_weights,
         )
         if timing_callback is not None:
             timing_callback(sampling_elapsed, perf_counter() - update_started)
