@@ -61,13 +61,20 @@ def select_seeds(
 
 
 def propagate_labels(
-    n_nodes: int, edges: np.ndarray, weights: np.ndarray, seeds: np.ndarray
+    n_nodes: int,
+    edges: np.ndarray,
+    weights: np.ndarray,
+    seeds: np.ndarray,
+    *,
+    progress_callback=None,
 ) -> np.ndarray:
     """Synchronously assign nodes to neighboring seed labels with deterministic ties."""
     edges, weights = _canonical_edges(edges, weights)
     seeds = np.asarray(seeds, dtype=np.int64)
     labels = np.full(n_nodes, -1, dtype=np.int64)
     labels[seeds] = np.arange(len(seeds), dtype=np.int64)
+    if progress_callback is not None:
+        progress_callback(int(np.count_nonzero(labels >= 0)), n_nodes, "Label propagation")
     if edges.size:
         adjacency = [[] for _ in range(n_nodes)]
         for (left, right), weight in zip(edges, weights):
@@ -88,13 +95,22 @@ def propagate_labels(
                     )
                     changed = True
             labels = next_labels
+            if progress_callback is not None:
+                progress_callback(
+                    int(np.count_nonzero(labels >= 0)), n_nodes, "Label propagation"
+                )
             if not changed:
                 raise ValueError("Every connected component must contain a seed.")
     return labels
 
 
 def coarsen_graph(
-    n_nodes: int, edges: np.ndarray, weights: np.ndarray, reduction_ratio: int
+    n_nodes: int,
+    edges: np.ndarray,
+    weights: np.ndarray,
+    reduction_ratio: int,
+    *,
+    progress_callback=None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Return fine-node labels and the weighted quotient graph."""
     edges, weights = _canonical_edges(edges, weights)
@@ -124,7 +140,9 @@ def coarsen_graph(
                 seeds, candidates[np.lexsort((candidates, -degree[candidates]))[0]]
             ]
     seeds = np.sort(seeds)
-    labels = propagate_labels(n_nodes, edges, weights, seeds)
+    labels = propagate_labels(
+        n_nodes, edges, weights, seeds, progress_callback=progress_callback
+    )
     # Label ids follow sorted seeds, so all ties are stable across runs.
     if edges.size:
         left, right = labels[edges[:, 0]], labels[edges[:, 1]]
@@ -145,6 +163,7 @@ def build_multilevel_hierarchy(
     *,
     reduction_ratio: int = 4,
     base_size: int = 1024,
+    progress_callback=None,
 ) -> list[tuple[np.ndarray, np.ndarray, np.ndarray]]:
     """Build successive levels, each mapping previous nodes to its quotient."""
     current_edges, current_weights = _canonical_edges(
@@ -153,8 +172,28 @@ def build_multilevel_hierarchy(
     current_nodes = n_nodes
     levels = []
     while current_nodes > base_size:
+        level_number = len(levels) + 1
+
+        def report_level_progress(completed, total, _stage):
+            if progress_callback is not None:
+                progress_callback(
+                    completed,
+                    total,
+                    f"Coarsening level {level_number} ({current_nodes:,} nodes)",
+                )
+
+        if progress_callback is not None:
+            progress_callback(
+                0,
+                current_nodes,
+                f"Coarsening level {level_number} ({current_nodes:,} nodes)",
+            )
         labels, next_edges, next_weights = coarsen_graph(
-            current_nodes, current_edges, current_weights, reduction_ratio
+            current_nodes,
+            current_edges,
+            current_weights,
+            reduction_ratio,
+            progress_callback=report_level_progress,
         )
         next_nodes = int(labels.max()) + 1 if labels.size else 0
         if next_nodes >= current_nodes:

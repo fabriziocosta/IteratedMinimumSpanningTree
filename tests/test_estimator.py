@@ -449,6 +449,24 @@ def test_mps_device_requires_available_backend(monkeypatch):
         ).fit(small_data())
 
 
+def test_rinnd_neighbor_backend_does_not_override_optimizer_device(monkeypatch):
+    monkeypatch.setattr(torch.backends.mps, "is_available", lambda: True)
+    estimator = IteratedMinimumSpanningTreeEmbedder(
+        device="mps", mst_neighbor_backend="rinnd"
+    )
+    options = estimator._validated_fit_options()
+    assert options["resolved_device"] == "mps"
+    assert options["mst_neighbor_backend"] == "rinnd"
+
+
+def test_explicit_rinnd_backend_rejects_cosine_metric():
+    estimator = IteratedMinimumSpanningTreeEmbedder(
+        mst_method="famst", mst_neighbor_backend="rinnd", metric="cosine"
+    )
+    with pytest.raises(ValueError, match="requires dense Euclidean FAMST input"):
+        estimator._validated_fit_options()
+
+
 @pytest.mark.parametrize(
     ("parameter", "value"),
     [

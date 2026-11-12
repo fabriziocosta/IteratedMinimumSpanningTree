@@ -205,9 +205,10 @@ drift without changing pairwise differences. `device="auto"` and
 `device="cpu"` select the sequential CPU Numba optimizer. `device="mps"`
 selects a PyTorch MPS backend that computes updates for each active-edge batch
 together and applies batches sequentially. This path has a different trajectory
-from sequential CPU SGD. For FAMST, MPS also builds the exact chunked
-nearest-neighbor candidate graph on the GPU; component connection and tree
-extraction remain on CPU. MPS samples negative pairs and updates coordinates on
+from sequential CPU SGD. FAMST neighbor search is selected independently by
+`mst_neighbor_backend`, so RINND can build the candidate graph while the
+optimizer uses MPS. Component connection and tree extraction remain on CPU.
+MPS samples negative pairs and updates coordinates on
 the GPU, with a rare exact CPU fallback for unusually dense neighborhoods. MPS
 batch size controls memory use and update grouping; CPU runs ignore it.
 
@@ -220,6 +221,7 @@ diagnostic.
 | --- | ---: | --- |
 | `n_msts` | 15 | Number of spanning-tree iterations; bottleneck edges can be reused with increased rank |
 | `mst_method` | `famst` | Approximate sparse FAMST trees or exact Prim trees |
+| `mst_neighbor_backend` | `auto` | FAMST neighbor search: prefer RINND when compatible, or select PyNNDescent / exact MPS search |
 | `mst_neighbors` | 15 | Initial FAMST neighbor count; the builder targets at least `2 * n_msts` |
 | `mst_inter_component_edges` | 5 | Bridge candidates retained per selected component pair |
 | `mst_representatives_per_component` | 10 | Maximum component representatives used to select bridge pairs |
@@ -238,9 +240,11 @@ diagnostic.
 | `pca_init` | `True` | Use standardized PCA scores to initialize feature-based fits |
 | `pca_init_scaling` | `global` | Scale PCA scores uniformly into `[-1, 1]`; `none` preserves their magnitudes |
 
-Graph construction runs on CPU except that dense FAMST neighbor search can use
-exact chunked search on MPS when `device="mps"`. The transductive optimizer
-uses Numba on CPU or PyTorch on MPS, depending on `device`.
+With `mst_neighbor_backend="auto"`, dense Euclidean FAMST inputs use RINND when
+available; otherwise graph construction retains its device-based backend
+selection. RINND is optional (`pip install 'imste[rinnd]'`). The transductive
+optimizer uses Numba on CPU or PyTorch on MPS, depending on `device`,
+independently of the neighbor-search backend.
 
 ## 6. Practical use
 
@@ -303,16 +307,17 @@ $$
 $$
 
 The default `mst_method="famst"` backend builds a sparse nearest-neighbor
-graph. CPU builds use PyNNDescent; MPS builds use exact chunked nearest-neighbor
-search on the GPU. It samples up to `mst_representatives_per_component`
+graph. `mst_neighbor_backend="auto"` prefers RINND for dense Euclidean input;
+PyNNDescent remains available for CPU and sparse builds, and exact chunked MPS
+search is selectable. It samples up to `mst_representatives_per_component`
 points per ANN component, builds an exact MST over those representatives, and
 uses its cross-component edges to select unique component pairs for bridge
 search and refinement. It extracts ranked trees, reusing bottleneck edges when
 needed. For a fixed neighbor count and a small number of ANN components, its
 graph storage grows approximately linearly with the number of rows. Its result
 is approximate and does not guarantee the same trees as the complete Euclidean
-graph. The CPU implementation uses PyNNDescent. Both paths can increase the
-neighbor count, within `mst_max_neighbors`, when the candidate graph lacks
+graph. PyNNDescent remains available as a fallback and explicit backend. Each
+backend can increase the neighbor count, within `mst_max_neighbors`, when the candidate graph lacks
 enough unused edges. This follows the FAMST approach by Almansoori and
 Telek (2025).
 

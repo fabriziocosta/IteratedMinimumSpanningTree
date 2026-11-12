@@ -11,6 +11,7 @@ graph-construction fallback.
 from __future__ import annotations
 
 from collections.abc import Callable
+import inspect
 
 import numpy as np
 from scipy.sparse import csr_matrix, issparse
@@ -382,7 +383,57 @@ def _ann_edges(
     return _neighbor_edges_to_dict(indices, distances)
 
 
-def _ann_edges_mps(X: np.ndarray, neighbors: int) -> dict[tuple[int, int], float]:
+def _rinnd_class():
+    """Return a supported RINND implementation, or ``None`` if unavailable."""
+    try:
+        from rinnd import RINND
+    except ImportError:
+        return None
+    try:
+        if "n_jobs" not in inspect.signature(RINND).parameters:
+            return None
+    except (TypeError, ValueError):
+        return None
+    return RINND
+
+
+def _ann_edges_rinnd(
+    X: np.ndarray,
+    neighbors: int,
+    random_state: int | None,
+    *,
+    verbose: bool = False,
+) -> dict[tuple[int, int], float]:
+    """Build a dense Euclidean candidate graph with RINND."""
+    RINND = _rinnd_class()
+    if RINND is None:
+        raise ImportError(
+            "mst_neighbor_backend='rinnd' requires RINND >= 0.3.1. Install it "
+            "with `python -m pip install 'imste[rinnd]'`."
+        )
+
+    features = np.ascontiguousarray(X, dtype=np.float32)
+    n_samples = features.shape[0]
+    index = RINND(
+        features,
+        metric="euclidean",
+        n_neighbors=min(neighbors, n_samples - 1),
+        random_state=random_state,
+        n_trees=max(4, min(8, 5 + int(round(n_samples**0.5 / 20.0)))),
+        n_iters=max(5, int(round(np.log2(n_samples)))),
+        max_candidates=max(20, min(60, int(1.5 * neighbors))),
+        n_jobs=-1,
+        verbose=verbose,
+    )
+    indices, distances = index.neighbor_graph
+    return _neighbor_edges_to_dict(indices, distances)
+
+
+def _ann_edges_mps(
+    X: np.ndarray,
+    neighbors: int,
+    progress_callback: ProgressCallback | None = None,
+) -> dict[tuple[int, int], float]:
     """Build an exact k-neighbor candidate graph with chunked MPS distances."""
     import torch
 
@@ -394,10 +445,14 @@ def _ann_edges_mps(X: np.ndarray, neighbors: int) -> dict[tuple[int, int], float
     n_samples = X.shape[0]
     norms = torch.sum(features * features, dim=1)
     chunk_size = min(512, n_samples)
+    n_chunks = (n_samples + chunk_size - 1) // chunk_size
     all_indices: list[np.ndarray] = []
     all_distances: list[np.ndarray] = []
 
-    for start in range(0, n_samples, chunk_size):
+    if progress_callback is not None:
+        progress_callback(0, n_chunks, "FAMST MPS neighbor search")
+
+    for chunk_index, start in enumerate(range(0, n_samples, chunk_size), start=1):
         stop = min(start + chunk_size, n_samples)
         rows = torch.arange(start, stop, device=device)
         query = features[start:stop]
@@ -416,6 +471,8 @@ def _ann_edges_mps(X: np.ndarray, neighbors: int) -> dict[tuple[int, int], float
         )
         all_indices.append(nearest_indices.cpu().numpy())
         all_distances.append(torch.sqrt(nearest_squared).cpu().numpy())
+        if progress_callback is not None:
+            progress_callback(chunk_index, n_chunks, "FAMST MPS neighbor search")
 
     return _neighbor_edges_to_dict(
         np.concatenate(all_indices, axis=0),
@@ -680,10 +737,22 @@ def iterated_famst_edges(
     representatives_per_component: int = 10,
     *,
     neighbor_device: str = "cpu",
+    neighbor_backend: str = "auto",
     return_ranks: bool = False,
     metric: str = "euclidean",
 ) -> tuple[np.ndarray, np.ndarray]:
     """Build ranked trees from an adaptive sparse neighbor graph."""
+    if neighbor_backend not in {"auto", "rinnd", "pynndescent", "mps_exact"}:
+        raise ValueError(
+            "mst_neighbor_backend must be one of 'auto', 'rinnd', "
+            "'pynndescent', or 'mps_exact'."
+        )
+    if neighbor_backend == "rinnd" and metric != "euclidean":
+        raise ValueError("mst_neighbor_backend='rinnd' requires metric='euclidean'.")
+    if neighbor_backend == "rinnd" and issparse(X):
+        raise ValueError("mst_neighbor_backend='rinnd' requires dense input.")
+    if neighbor_backend == "mps_exact" and issparse(X):
+        raise ValueError("mst_neighbor_backend='mps_exact' requires dense input.")
     if metric == "cosine":
         # FAMST's candidate refinement kernels are Euclidean-specific. Use
         # exact Prim to preserve cosine semantics throughout graph building.
@@ -732,8 +801,28 @@ def iterated_famst_edges(
         if progress_callback is not None:
             progress_callback(0, n_msts, detail)
         seed = int(rng.randint(0, np.iinfo(np.int32).max))
-        if neighbor_device == "mps" and not issparse(X):
-            candidate_edges = _ann_edges_mps(X, current_neighbors)
+        dense_euclidean = not issparse(X) and metric == "euclidean"
+        rinnd = _rinnd_class() if dense_euclidean else None
+        use_rinnd = neighbor_backend == "rinnd" or (
+            neighbor_backend == "auto" and rinnd is not None
+        )
+        if use_rinnd:
+            candidate_edges = _ann_edges_rinnd(
+                X,
+                current_neighbors,
+                seed,
+                verbose=progress_callback is not None,
+            )
+        elif neighbor_backend == "pynndescent":
+            candidate_edges = _ann_edges(X, current_neighbors, seed)
+        elif neighbor_backend == "mps_exact" or (
+            neighbor_backend == "auto"
+            and neighbor_device == "mps"
+            and dense_euclidean
+        ):
+            candidate_edges = _ann_edges_mps(
+                X, current_neighbors, progress_callback=progress_callback
+            )
         else:
             candidate_edges = _ann_edges(X, current_neighbors, seed)
         _connect_components(

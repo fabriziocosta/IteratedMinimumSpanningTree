@@ -312,8 +312,12 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
         ``'famst'`` uses a sparse neighbor graph and FAMST-style component
         connection and refinement. Both modes reuse an edge only when required
         to connect a residual bottleneck, incrementing its rank for each reuse.
-        FAMST uses PyNNDescent on CPU and exact chunked nearest-neighbor search
-        on MPS when ``device='mps'``.
+        FAMST uses the backend selected by ``mst_neighbor_backend``.
+    mst_neighbor_backend : {'auto', 'rinnd', 'pynndescent', 'mps_exact'}, default='auto'
+        Neighbor search backend for dense Euclidean FAMST inputs. ``'auto'``
+        prefers RINND when installed, otherwise it uses the existing device-based
+        choice. RINND search does not change the optimizer selected by ``device``.
+        RINND is optional; install it with ``pip install 'imste[rinnd]'``.
     metric : {'euclidean', 'cosine'}, default='euclidean'
         Feature distance used to construct the spanning-tree graph. Cosine
         distance with FAMST uses the exact Prim backend.
@@ -333,11 +337,14 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
         reusing residual bottleneck edges.
     progress_callback : callable or None, default=None
         Optional function called with ``(completed_epochs, total_epochs)`` after
-        each optimization epoch.
+        each optimization epoch, including multilevel refinement epochs.
     mst_progress_callback : callable or None, default=None
-        Optional function called with ``(completed_trees, total_trees, detail)``
-        during MST construction. FAMST's detail includes its current neighbor
-        count.
+        Optional function called with ``(completed, total, detail)`` during MST
+        construction and multilevel coarsening/refinement. FAMST's detail
+        includes its current neighbor count.
+    verbose : bool, default=False
+        Print timestamped fit stages and display progress bars for graph
+        construction, multilevel initialization, and optimization.
     """
 
     def __init__(
@@ -360,6 +367,7 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
         mst_max_neighbors: int | None = None,
         progress_callback: Callable[[int, int], None] | None = None,
         mst_progress_callback: Callable[[int, int, str], None] | None = None,
+        verbose: bool = False,
         mst_representatives_per_component: int = 10,
         pca_init: bool = True,
         pca_init_scaling: str = "global",
@@ -369,6 +377,7 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
         multilevel_base_size: int = 1024,
         multilevel_epochs: int = 10,
         metric: str = "euclidean",
+        mst_neighbor_backend: str = "auto",
     ) -> None:
         self.n_msts = n_msts
         self.n_components = n_components
@@ -389,6 +398,10 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
         self.mst_max_neighbors = mst_max_neighbors
         self.progress_callback = progress_callback
         self.mst_progress_callback = mst_progress_callback
+        self.verbose = verbose
+        self._active_progress_callback = progress_callback
+        self._active_mst_progress_callback = mst_progress_callback
+        self._progress_reporter = None
         self.mst_representatives_per_component = mst_representatives_per_component
         self.pca_init_scaling = pca_init_scaling
         self.init_coordinates = init_coordinates
@@ -397,8 +410,11 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
         self.multilevel_base_size = multilevel_base_size
         self.multilevel_epochs = multilevel_epochs
         self.metric = metric
+        self.mst_neighbor_backend = mst_neighbor_backend
 
     def _validated_fit_options(self) -> dict[str, object]:
+        if not isinstance(self.verbose, (bool, np.bool_)):
+            raise ValueError("verbose must be a boolean.")
         n_msts = _positive_integer("n_msts", self.n_msts)
         n_components = _positive_integer("n_components", self.n_components)
         n_epochs = _positive_integer("n_epochs", self.n_epochs, allow_zero=True)
@@ -430,8 +446,25 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
         )
         if self.mst_method not in {"prim", "famst"}:
             raise ValueError("mst_method must be either 'prim' or 'famst'.")
+        if self.mst_neighbor_backend not in {
+            "auto", "rinnd", "pynndescent", "mps_exact"
+        }:
+            raise ValueError(
+                "mst_neighbor_backend must be one of 'auto', 'rinnd', "
+                "'pynndescent', or 'mps_exact'."
+            )
         if self.metric not in {"euclidean", "cosine"}:
             raise ValueError("metric must be either 'euclidean' or 'cosine'.")
+        if self.mst_method == "famst" and self.metric != "euclidean":
+            if self.mst_neighbor_backend in {"rinnd", "mps_exact"}:
+                raise ValueError(
+                    f"mst_neighbor_backend={self.mst_neighbor_backend!r} "
+                    "requires dense Euclidean FAMST input."
+                )
+        if self.mst_method == "prim" and self.mst_neighbor_backend != "auto":
+            raise ValueError(
+                "mst_neighbor_backend applies only when mst_method='famst'."
+            )
         learning_rate = _finite_nonnegative(
             "learning_rate", self.learning_rate, strictly_positive=True
         )
@@ -474,6 +507,7 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
             "inter_component_edges": inter_component_edges,
             "representatives_per_component": representatives_per_component,
             "max_neighbors": max_neighbors,
+            "mst_neighbor_backend": self.mst_neighbor_backend,
             "learning_rate": learning_rate,
             "lambda_rep": lambda_rep,
             "epsilon": epsilon,
@@ -488,6 +522,33 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
             "resolved_device": resolved_device,
             "metric": self.metric,
         }
+
+    def _activate_progress_reporting(self) -> None:
+        """Combine user callbacks with the built-in verbose progress display."""
+        self._active_progress_callback = self.progress_callback
+        self._active_mst_progress_callback = self.mst_progress_callback
+        self._progress_reporter = None
+        if not self.verbose:
+            return
+
+        from ._progress import IMSTEProgressReporter
+
+        reporter = IMSTEProgressReporter(self)
+        reporter.start()
+        self._progress_reporter = reporter
+
+        def report_epochs(completed: int, total: int) -> None:
+            if self.progress_callback is not None:
+                self.progress_callback(completed, total)
+            reporter.epoch_callback(completed, total)
+
+        def report_stages(completed: int, total: int, detail: str) -> None:
+            if self.mst_progress_callback is not None:
+                self.mst_progress_callback(completed, total, detail)
+            reporter.mst_callback(completed, total, detail)
+
+        self._active_progress_callback = report_epochs
+        self._active_mst_progress_callback = report_stages
 
     def _fit_edges(
         self,
@@ -579,12 +640,24 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
             temperature=options["logistic_temperature"],
             random_state=seed,
             schedule_by_rank=schedule_by_rank,
-            progress_callback=self.progress_callback,
+            progress_callback=self._active_progress_callback,
             timing_callback=record_optimizer_timing,
         )
         if optimizer_batch_size is not None:
             optimizer_kwargs["batch_size"] = optimizer_batch_size
+        if self._active_mst_progress_callback is not None:
+            self._active_mst_progress_callback(
+                0,
+                max(options["n_epochs"], 1),
+                "Final embedding optimization",
+            )
         optimizer(coordinates, edges, tree_ranks, **optimizer_kwargs)
+        if self._active_mst_progress_callback is not None:
+            self._active_mst_progress_callback(
+                options["n_epochs"],
+                max(options["n_epochs"], 1),
+                "Final embedding optimization",
+            )
 
         self.embedding_optimization_time_ = time.perf_counter() - embedding_started
         self.optimizer_negative_sampling_time_ = optimizer_profile["negative_sampling"]
@@ -613,6 +686,8 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
             self.n_samples_fit_ = n_samples
             self.graph_input_ = True
         self.fit_time_ = time.perf_counter() - fit_started
+        if self._progress_reporter is not None:
+            self._progress_reporter.finish()
         return self
 
     def _default_initialization(
@@ -645,6 +720,7 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
             ranks,
             reduction_ratio=options["multilevel_reduction_ratio"],
             base_size=options["multilevel_base_size"],
+            progress_callback=self._active_mst_progress_callback,
         )
         if not levels:
             return None
@@ -696,6 +772,12 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
             level_weights = quotient_weights if level_index == len(levels) else None
             if level_index != len(levels):
                 labels, level_edges, level_weights = levels[level_index]
+                if self._active_mst_progress_callback is not None:
+                    self._active_mst_progress_callback(
+                        0,
+                        max(n_samples, 1),
+                        f"Expanding level {len(levels) - level_index}",
+                    )
                 coordinates = expand_coordinates(
                     labels,
                     level_edges,
@@ -705,7 +787,19 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
                     if self.random_state is None
                     else self.random_state + level_index,
                 )
+                if self._active_mst_progress_callback is not None:
+                    self._active_mst_progress_callback(
+                        n_samples,
+                        max(n_samples, 1),
+                        f"Expanded level {len(levels) - level_index}",
+                    )
             if level_edges.size and options["multilevel_epochs"]:
+                if self._active_mst_progress_callback is not None:
+                    self._active_mst_progress_callback(
+                        0,
+                        options["multilevel_epochs"],
+                        f"Refining level {level_index + 1}",
+                    )
                 kwargs = dict(
                     n_epochs=options["multilevel_epochs"],
                     learning_rate=options["learning_rate"],
@@ -719,11 +813,18 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
                     else self.random_state + level_index,
                     schedule_by_rank=False,
                     edge_weights=level_weights,
+                    progress_callback=self._active_progress_callback,
                 )
                 if resolved_device == "mps":
                     kwargs["batch_size"] = options["batch_size"]
                 ranks_at_level = np.ones(len(level_edges), dtype=np.int32)
                 optimizer(coordinates, level_edges, ranks_at_level, **kwargs)
+                if self._active_mst_progress_callback is not None:
+                    self._active_mst_progress_callback(
+                        options["multilevel_epochs"],
+                        options["multilevel_epochs"],
+                        f"Refined level {level_index + 1}",
+                    )
         return coordinates
 
     def fit(self, X: object, y: object = None) -> "IteratedMinimumSpanningTreeEmbedder":
@@ -752,6 +853,7 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
         n_samples = X_checked.shape[0]
         if n_samples < 2:
             raise ValueError("X must contain at least two samples to construct an MST.")
+        self._activate_progress_reporting()
         graph_started = time.perf_counter()
         edges, tree_ranks = build_mst_edges(
             X_checked,
@@ -763,7 +865,8 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
             max_neighbors=options["max_neighbors"],
             representatives_per_component=options["representatives_per_component"],
             neighbor_device=options["resolved_device"],
-            progress_callback=self.mst_progress_callback,
+            neighbor_backend=options["mst_neighbor_backend"],
+            progress_callback=self._active_mst_progress_callback,
             return_ranks=True,
             metric=options["metric"],
         )
@@ -784,7 +887,10 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
             **{
                 name: value
                 for name, value in options.items()
-                if name not in {"n_components", "n_msts", "resolved_device"}
+                if name not in {
+                    "n_components", "n_msts", "resolved_device",
+                    "mst_neighbor_backend",
+                }
             },
         )
 
@@ -838,11 +944,12 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
                     "init_features must have one row per distance_graph node."
                 )
 
+        self._activate_progress_reporting()
         graph_started = time.perf_counter()
         edges, tree_ranks = iterated_graph_edges(
             distance_graph,
             options["n_msts"],
-            progress_callback=self.mst_progress_callback,
+            progress_callback=self._active_mst_progress_callback,
             return_ranks=True,
         )
         self.graph_construction_time_ = time.perf_counter() - graph_started
@@ -860,7 +967,10 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
             **{
                 name: value
                 for name, value in options.items()
-                if name not in {"n_components", "n_msts", "resolved_device"}
+                if name not in {
+                    "n_components", "n_msts", "resolved_device",
+                    "mst_neighbor_backend",
+                }
             },
         )
 

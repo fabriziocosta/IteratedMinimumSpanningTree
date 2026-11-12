@@ -25,10 +25,13 @@ python -m pip install ".[notebook]"
 
 Both estimators accept dense arrays and SciPy CSR matrices. The graph builders
 keep CSR inputs sparse. `InductiveIMSTE` densifies only each MLP mini-batch.
-The default CPU FAMST graph builder uses PyNNDescent, which is installed with
-the package. MPS uses exact chunked nearest-neighbor search for dense FAMST
-inputs; CSR inputs use PyNNDescent on CPU for graph construction. To use only
-the exact Prim builder, select `mst_method="prim"`.
+The default FAMST graph builder prefers RINND for dense Euclidean inputs when
+RINND is installed. Otherwise it uses PyNNDescent on CPU or exact chunked
+nearest-neighbor search on MPS. Install the optional RINND backend with
+`python -m pip install 'imste[rinnd]'`. The neighbor-search backend can be
+selected independently from the optimizer's `device`; CSR inputs continue to
+use PyNNDescent. To use only the exact Prim builder, select
+`mst_method="prim"`.
 
 For an existing sparse graph whose stored values are distances, use
 `fit_graph()` instead of passing the matrix to `fit()` (which treats rows as
@@ -296,6 +299,7 @@ error. The per-edge maximum and component pairs remain available for review.
 | `device` | `"auto"` | `"auto"` and `"cpu"` select CPU; `"mps"` selects Apple's PyTorch GPU backend |
 | `metric` | `"euclidean"` | Feature distance for the graph: `"euclidean"` or `"cosine"` |
 | `mst_method` | `"famst"` | Sparse approximate `"famst"` or exact dense `"prim"` |
+| `mst_neighbor_backend` | `"auto"` | `"auto"`, `"rinnd"`, `"pynndescent"`, or `"mps_exact"` FAMST neighbor search |
 | `mst_neighbors` | `15` | Initial candidate neighbors for FAMST |
 | `mst_inter_component_edges` | `5` | Candidate connections per FAMST component pair |
 | `mst_representatives_per_component` | `10` | Maximum representatives per component for selecting FAMST bridge pairs |
@@ -332,11 +336,12 @@ its normal rank scheduling. Explicit `init_coordinates` skip this process; if
 the graph cannot be reduced, the configured PCA or random initialization is
 used.
 
-The selected device is available as `mapper.device_` after fitting.
-`device="auto"` keeps graph construction and optimization on CPU. With
-`device="mps"`, FAMST builds its exact chunked nearest-neighbor candidate graph
-on the Apple GPU, then performs component connection and tree extraction on
-CPU; the batched optimizer also runs on MPS. MPS requires
+The selected optimizer device is available as `mapper.device_` after fitting.
+`device="auto"` keeps optimization on CPU. With `device="mps"`, the batched
+optimizer runs on the Apple GPU. The independent
+`mst_neighbor_backend="auto"` setting prefers RINND for dense Euclidean FAMST
+inputs, while `"mps_exact"` selects exact chunked neighbor search on MPS. MPS
+requires
 `torch.backends.mps.is_available()` to be true. For example:
 
 ```python

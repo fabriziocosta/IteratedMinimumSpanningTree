@@ -21,6 +21,7 @@ def build_mst_edges(
     max_neighbors: int | None,
     representatives_per_component: int = 10,
     neighbor_device: str = "cpu",
+    neighbor_backend: str = "auto",
     progress_callback: Callable[[int, int, str], None] | None = None,
     return_ranks: bool = False,
     metric: str = "euclidean",
@@ -45,6 +46,7 @@ def build_mst_edges(
             progress_callback,
             representatives_per_component,
             neighbor_device=neighbor_device,
+            neighbor_backend=neighbor_backend,
             return_ranks=return_ranks,
             metric=metric,
         )
