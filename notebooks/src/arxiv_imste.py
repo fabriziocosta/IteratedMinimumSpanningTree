@@ -2,11 +2,90 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 from typing import Any
 
 import numpy as np
+
+
+def select_arxiv_experiment_subset(
+    X,
+    labels,
+    *,
+    dataset_id: str,
+    mode: str = "balanced",
+    sample_size: int = 20_000,
+    random_state: int = 42,
+):
+    """Select a reproducible full, random, or class-balanced experiment set.
+
+    Balanced sampling is without replacement and gives each class an equal
+    number of unique rows (quotas can differ by one when the requested size is
+    not divisible by the number of classes). The returned data identifier
+    includes the selected source-row indices, so embedding caches cannot mix
+    different subsets.
+    """
+    if mode not in {"full", "random", "balanced"}:
+        raise ValueError("mode must be 'full', 'random', or 'balanced'.")
+    if X.shape[0] != len(labels):
+        raise ValueError("X and labels must contain the same number of rows.")
+    if mode == "full":
+        return X, labels, str(dataset_id)
+    if isinstance(sample_size, bool) or not isinstance(sample_size, (int, np.integer)):
+        raise ValueError("sample_size must be a positive integer.")
+    if not 1 <= sample_size <= X.shape[0]:
+        raise ValueError("sample_size must be between 1 and the number of rows.")
+
+    rng = np.random.RandomState(random_state)
+    label_values = np.asarray(labels)
+    if mode == "random":
+        indices = rng.choice(X.shape[0], size=int(sample_size), replace=False)
+    else:
+        classes, counts = np.unique(label_values, return_counts=True)
+        max_balanced_size = int(len(classes) * counts.min())
+        if sample_size > max_balanced_size:
+            raise ValueError(
+                f"A unique balanced sample can contain at most {max_balanced_size:,} "
+                f"rows for {len(classes)} classes; requested {sample_size:,}. "
+                "Reduce sample_size or use mode='random'."
+            )
+        base, remainder = divmod(int(sample_size), len(classes))
+        quotas = np.full(len(classes), base, dtype=np.int64)
+        # Give any remainder to classes with the most spare examples.
+        remainder_order = np.argsort(-counts, kind="stable")
+        quotas[remainder_order[:remainder]] += 1
+        selected = []
+        for class_value, quota in zip(classes, quotas):
+            class_rows = np.flatnonzero(label_values == class_value)
+            selected.append(rng.choice(class_rows, size=int(quota), replace=False))
+        indices = np.concatenate(selected)
+        rng.shuffle(indices)
+
+    if hasattr(X, "iloc"):
+        X_subset = X.iloc[indices].reset_index(drop=True)
+    else:
+        X_subset = X[indices]
+    if hasattr(labels, "iloc"):
+        labels_subset = labels.iloc[indices].reset_index(drop=True)
+    else:
+        labels_subset = labels[indices]
+
+    indices_hash = hashlib.sha256(
+        np.ascontiguousarray(indices, dtype=np.int64).view(np.uint8)
+    ).hexdigest()
+    identity = {
+        "dataset_id": str(dataset_id),
+        "mode": mode,
+        "sample_size": int(sample_size),
+        "random_state": int(random_state),
+        "indices_sha256": indices_hash,
+    }
+    sample_id = hashlib.sha256(
+        json.dumps(identity, sort_keys=True).encode("utf-8")
+    ).hexdigest()[:20]
+    return X_subset, labels_subset, sample_id
 
 
 def save_arxiv_projection_cache(

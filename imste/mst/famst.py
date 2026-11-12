@@ -19,6 +19,7 @@ from numba import njit
 
 
 ProgressCallback = Callable[[int, int, str], None]
+CandidateEdgesCallback = Callable[[np.ndarray], None]
 
 
 @njit(cache=True)
@@ -740,6 +741,7 @@ def iterated_famst_edges(
     neighbor_backend: str = "auto",
     return_ranks: bool = False,
     metric: str = "euclidean",
+    candidate_edges_callback: CandidateEdgesCallback | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Build ranked trees from an adaptive sparse neighbor graph."""
     if neighbor_backend not in {"auto", "rinnd", "pynndescent", "mps_exact"}:
@@ -825,6 +827,13 @@ def iterated_famst_edges(
             )
         else:
             candidate_edges = _ann_edges(X, current_neighbors, seed)
+        local_neighbor_edges = None
+        if candidate_edges_callback is not None:
+            local_neighbor_edges = np.fromiter(
+                (index for edge in candidate_edges for index in edge),
+                dtype=np.int32,
+                count=2 * len(candidate_edges),
+            ).reshape(-1, 2)
         _connect_components(
             X,
             candidate_edges,
@@ -861,6 +870,9 @@ def iterated_famst_edges(
             detail = f"FAMST local repair ({added} edges added)"
         if trees is not None:
             edges, ranks = trees
+            if candidate_edges_callback is not None:
+                assert local_neighbor_edges is not None
+                candidate_edges_callback(local_neighbor_edges)
             if return_ranks:
                 return edges, ranks
             return edges, 1.0 / ranks.astype(np.float64)

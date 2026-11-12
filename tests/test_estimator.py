@@ -8,6 +8,7 @@ from scipy import sparse
 from imste import IteratedMinimumSpanningTreeEmbedder
 from imste.inductive import InductiveIMSTE
 from imste._estimator import (
+    _append_candidate_attraction_edges,
     _iterated_mst_edges,
     _sample_negative_targets,
     _scale_initialization_coordinates,
@@ -108,6 +109,58 @@ def test_verbose_multilevel_progress_uses_global_level_bars(capsys):
     assert "Multilevel coarsening" in output
     assert "Multilevel refinement epochs" in output
     assert "refine level 1 epochs" not in output
+
+
+def test_candidate_neighbor_attractions_append_only_non_tree_edges():
+    edges = np.array([[0, 1], [1, 2], [2, 3]], dtype=np.int64)
+    ranks = np.array([1, 1, 1], dtype=np.int32)
+    candidates = np.array([[0, 1], [0, 2], [2, 3], [3, 4]], dtype=np.int32)
+
+    combined_edges, combined_ranks = _append_candidate_attraction_edges(
+        edges, ranks, candidates, n_samples=5
+    )
+
+    assert combined_edges.shape == (5, 2)
+    np.testing.assert_array_equal(combined_edges[-2:], [[0, 2], [3, 4]])
+    np.testing.assert_array_equal(combined_ranks, [1, 1, 1, 1, 1])
+
+
+def test_include_knn_attraction_adds_candidate_edges_to_fit_graph(monkeypatch):
+    import imste._estimator as estimator_module
+
+    base_edges = np.array([[0, 1], [1, 2], [2, 3], [3, 4]], dtype=np.int64)
+    candidate_edges = np.array([[0, 1], [0, 2], [1, 3], [3, 4]], dtype=np.int32)
+
+    def fake_build_mst_edges(X, *, candidate_edges_callback=None, **kwargs):
+        if candidate_edges_callback is not None:
+            candidate_edges_callback(candidate_edges)
+        return base_edges, np.ones(len(base_edges), dtype=np.int32)
+
+    monkeypatch.setattr(estimator_module, "build_mst_edges", fake_build_mst_edges)
+    estimator = IteratedMinimumSpanningTreeEmbedder(
+        n_msts=1,
+        n_epochs=0,
+        mst_method="famst",
+        include_knn_attraction=True,
+        pca_init=False,
+        multilevel_init=False,
+        random_state=5,
+    ).fit(np.random.RandomState(5).normal(size=(20, 2)))
+
+    fitted_edges = {tuple(edge) for edge in estimator.graph_edges_.tolist()}
+    assert fitted_edges == {(0, 1), (1, 2), (2, 3), (3, 4), (0, 2), (1, 3)}
+    assert estimator.graph_edges_.shape[0] == estimator.graph_ranks_.size
+
+
+def test_knn_attraction_rejects_unsupported_graph_modes():
+    with pytest.raises(ValueError, match="requires mst_method='famst'"):
+        IteratedMinimumSpanningTreeEmbedder(
+            mst_method="prim", include_knn_attraction=True
+        ).fit(small_data())
+    with pytest.raises(ValueError, match="requires metric='euclidean'"):
+        IteratedMinimumSpanningTreeEmbedder(
+            mst_method="famst", metric="cosine", include_knn_attraction=True
+        ).fit(small_data())
 
 
 def test_progress_callback_reports_completed_epochs_in_order():

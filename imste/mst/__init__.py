@@ -25,6 +25,7 @@ def build_mst_edges(
     progress_callback: Callable[[int, int, str], None] | None = None,
     return_ranks: bool = False,
     metric: str = "euclidean",
+    candidate_edges_callback: Callable[[np.ndarray], None] | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Dispatch MST construction to the selected backend."""
     if method == "prim":
@@ -49,6 +50,7 @@ def build_mst_edges(
             neighbor_backend=neighbor_backend,
             return_ranks=return_ranks,
             metric=metric,
+            candidate_edges_callback=candidate_edges_callback,
         )
     raise ValueError("mst_method must be either 'prim' or 'famst'.")
 

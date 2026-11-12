@@ -161,6 +161,34 @@ def _scale_initialization_coordinates(
     return coordinates / max_abs
 
 
+def _append_candidate_attraction_edges(
+    edges: np.ndarray,
+    ranks: np.ndarray,
+    candidate_edges: np.ndarray,
+    n_samples: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Append non-tree FAMST neighbor edges as rank-one attractions."""
+    edges = np.asarray(edges, dtype=np.int64).reshape(-1, 2)
+    ranks = np.asarray(ranks, dtype=np.int32).reshape(-1)
+    candidates = np.asarray(candidate_edges, dtype=np.int64).reshape(-1, 2)
+    if not candidates.size:
+        return edges, ranks
+    candidates = np.sort(candidates, axis=1)
+    candidate_keys = np.unique(candidates[:, 0] * n_samples + candidates[:, 1])
+    tree_edges = np.sort(edges, axis=1)
+    tree_keys = np.unique(tree_edges[:, 0] * n_samples + tree_edges[:, 1])
+    additional_keys = np.setdiff1d(candidate_keys, tree_keys, assume_unique=True)
+    if not additional_keys.size:
+        return edges, ranks
+    additional_edges = np.column_stack(
+        (additional_keys // n_samples, additional_keys % n_samples)
+    ).astype(np.int64, copy=False)
+    return (
+        np.vstack((edges, additional_edges)),
+        np.concatenate((ranks, np.ones(len(additional_edges), dtype=np.int32))),
+    )
+
+
 def _sample_negative_targets(
     rng: np.random.RandomState,
     packed_adjacency: np.ndarray,
@@ -325,6 +353,11 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
         Minimum initial approximate-neighbor count for ``mst_method='famst'``.
         FAMST targets the larger of this value and ``2 * n_msts``, subject to
         ``mst_max_neighbors``.
+    include_knn_attraction : bool, default=False
+        Include FAMST's approximate candidate-neighbor edges as additional
+        rank-one attractive edges alongside the ranked spanning trees. This
+        makes local neighborhoods denser and is available for Euclidean FAMST
+        fits.
     mst_inter_component_edges : int, default=5
         FAMST candidate edges retained between each component pair selected by
         the representative MST.
@@ -378,6 +411,7 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
         multilevel_epochs: int = 10,
         metric: str = "euclidean",
         mst_neighbor_backend: str = "auto",
+        include_knn_attraction: bool = False,
     ) -> None:
         self.n_msts = n_msts
         self.n_components = n_components
@@ -411,6 +445,7 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
         self.multilevel_epochs = multilevel_epochs
         self.metric = metric
         self.mst_neighbor_backend = mst_neighbor_backend
+        self.include_knn_attraction = include_knn_attraction
 
     def _validated_fit_options(self) -> dict[str, object]:
         if not isinstance(self.verbose, (bool, np.bool_)):
@@ -465,6 +500,12 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
             raise ValueError(
                 "mst_neighbor_backend applies only when mst_method='famst'."
             )
+        if not isinstance(self.include_knn_attraction, (bool, np.bool_)):
+            raise ValueError("include_knn_attraction must be a boolean.")
+        if self.include_knn_attraction and self.mst_method != "famst":
+            raise ValueError("include_knn_attraction requires mst_method='famst'.")
+        if self.include_knn_attraction and self.metric != "euclidean":
+            raise ValueError("include_knn_attraction requires metric='euclidean'.")
         learning_rate = _finite_nonnegative(
             "learning_rate", self.learning_rate, strictly_positive=True
         )
@@ -508,6 +549,7 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
             "representatives_per_component": representatives_per_component,
             "max_neighbors": max_neighbors,
             "mst_neighbor_backend": self.mst_neighbor_backend,
+            "include_knn_attraction": bool(self.include_knn_attraction),
             "learning_rate": learning_rate,
             "lambda_rep": lambda_rep,
             "epsilon": epsilon,
@@ -880,8 +922,21 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
         n_samples = X_checked.shape[0]
         if n_samples < 2:
             raise ValueError("X must contain at least two samples to construct an MST.")
+        if options["include_knn_attraction"] and n_samples <= max(
+            options["mst_neighbors"], 2 * options["n_msts"]
+        ) + 1:
+            raise ValueError(
+                "include_knn_attraction requires enough samples for FAMST "
+                "approximate-neighbor search."
+            )
         self._activate_progress_reporting()
         graph_started = time.perf_counter()
+        candidate_neighbor_edges: list[np.ndarray] = []
+        candidate_edges_callback = (
+            candidate_neighbor_edges.append
+            if options["include_knn_attraction"]
+            else None
+        )
         edges, tree_ranks = build_mst_edges(
             X_checked,
             n_msts=options["n_msts"],
@@ -896,8 +951,21 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
             progress_callback=self._active_mst_progress_callback,
             return_ranks=True,
             metric=options["metric"],
+            candidate_edges_callback=candidate_edges_callback,
         )
         tree_ranks = np.asarray(tree_ranks, dtype=np.int32)
+        if options["include_knn_attraction"]:
+            if not candidate_neighbor_edges:
+                raise RuntimeError(
+                    "FAMST did not expose candidate neighbors for attraction; "
+                    "try a larger input or disable include_knn_attraction."
+                )
+            edges, tree_ranks = _append_candidate_attraction_edges(
+                edges,
+                tree_ranks,
+                candidate_neighbor_edges[-1],
+                n_samples,
+            )
         self.graph_construction_time_ = time.perf_counter() - graph_started
         if self._progress_reporter is not None:
             self._progress_reporter.phase_finished(
@@ -920,7 +988,7 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
                 for name, value in options.items()
                 if name not in {
                     "n_components", "n_msts", "resolved_device",
-                    "mst_neighbor_backend",
+                    "mst_neighbor_backend", "include_knn_attraction",
                 }
             },
         )
@@ -953,6 +1021,11 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
         """
         fit_started = time.perf_counter()
         options = self._validated_fit_options()
+        if options["include_knn_attraction"]:
+            raise ValueError(
+                "include_knn_attraction is available for feature-based fit(X), "
+                "not fit_graph()."
+            )
         if not sparse.issparse(distance_graph):
             raise ValueError("distance_graph must be a SciPy sparse matrix.")
         if (

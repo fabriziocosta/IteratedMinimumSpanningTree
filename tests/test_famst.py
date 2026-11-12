@@ -179,6 +179,30 @@ def test_famst_can_return_ranks_without_changing_weight_default(monkeypatch):
     np.testing.assert_array_equal(weights, 1.0 / ranks)
 
 
+def test_famst_exposes_local_candidate_edges_when_requested(monkeypatch):
+    X, edges, _ = _separated_components()
+    monkeypatch.setattr(
+        "imste.mst.famst._ann_edges",
+        lambda X, neighbors, random_state: dict(edges),
+    )
+    captured = []
+    iterated_famst_edges(
+        X,
+        n_msts=1,
+        random_state=9,
+        neighbors=1,
+        inter_component_edges=1,
+        max_neighbors=4,
+        representatives_per_component=2,
+        neighbor_backend="pynndescent",
+        candidate_edges_callback=captured.append,
+    )
+
+    assert len(captured) == 1
+    assert captured[0].shape == (len(edges), 2)
+    assert {tuple(pair) for pair in captured[0].tolist()} == set(edges)
+
+
 def test_ann_edges_reuse_minimum_finite_returned_distance(monkeypatch):
     class FakeNNDescent:
         def __init__(self, *args, **kwargs):

@@ -119,6 +119,16 @@ allocating the core estimator's quadratic adjacency bit matrix. The
 implementation follows Almansoori and Telek's
 [FAMST paper](https://arxiv.org/abs/2507.14261).
 
+The optimizer normally attracts along ranked MST edges only. For a denser
+local objective, `include_knn_attraction=True` also attracts along FAMST's
+approximate candidate-neighbor edges as rank-one positive edges. This option
+is available for Euclidean `fit(X)` calls with `mst_method="famst"`; it
+increases optimization graph size
+and can change neighborhood fidelity. The
+[balanced arXiv experiment notebook](notebooks/05_arxiv_balanced_imste_experiments.ipynb)
+compares this option with PCA/multilevel and UMAP-warm-start initializations on
+a deterministic, class-balanced subset.
+
 The labels are not passed to the estimator. Use them afterward to color or
 score a visualization if needed.
 
@@ -301,6 +311,7 @@ error. The per-edge maximum and component pairs remain available for review.
 | `mst_method` | `"famst"` | Sparse approximate `"famst"` or exact dense `"prim"` |
 | `mst_neighbor_backend` | `"auto"` | `"auto"`, `"rinnd"`, `"pynndescent"`, or `"mps_exact"` FAMST neighbor search |
 | `mst_neighbors` | `15` | Initial candidate neighbors for FAMST |
+| `include_knn_attraction` | `False` | Also attract along FAMST candidate-neighbor edges in Euclidean `fit(X)` |
 | `mst_inter_component_edges` | `5` | Candidate connections per FAMST component pair |
 | `mst_representatives_per_component` | `10` | Maximum representatives per component for selecting FAMST bridge pairs |
 | `mst_max_neighbors` | `None` | FAMST neighbor cap; defaults to four times `mst_neighbors` |
