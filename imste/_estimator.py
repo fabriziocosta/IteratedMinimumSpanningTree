@@ -370,7 +370,8 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
     gravity_resolution : float, default=0.8
         Leiden resolution used to identify gravity regions.
     gravity_strength : float, default=0.2
-        Base attraction from each point toward its region's density core.
+        Base attraction from each point toward its region's density core when
+        ``gravity_mode='density_core'``. It does not affect Mexican-hat mode.
     gravity_core_quantile : float, default=0.95
         Within-region density quantile defining the core points.
     gravity_mass_power : float, default=0.5

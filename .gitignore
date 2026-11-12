@@ -19,6 +19,7 @@ venv/
 .DS_Store
 
 # Downloaded datasets and large generated artifacts
+/data/
 !/data/arxiv/
 /data/arxiv/*
 !/data/arxiv/prepare_arxiv_dataset.ipynb

@@ -6,13 +6,14 @@ import numbers
 import sys
 import time
 from pathlib import Path
-from urllib.request import urlretrieve
+from io import BytesIO
+from urllib.request import urlopen
 
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from IPython.display import display
-from sklearn.datasets import fetch_openml, get_data_home
+from sklearn.datasets import fetch_openml
 from sklearn.model_selection import train_test_split
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
@@ -51,28 +52,20 @@ def _load_openml(name: str) -> tuple[np.ndarray, np.ndarray]:
         version=1,
         as_frame=False,
         parser="liac-arff",
-        cache=True,
+        cache=False,
     )
     labels = np.unique(dataset.target, return_inverse=True)[1]
     return np.asarray(dataset.data), labels
 
 
 def _load_kmnist() -> tuple[np.ndarray, np.ndarray]:
-    """Load Kuzushiji-MNIST from its official NumPy archives and cache locally."""
+    """Download Kuzushiji-MNIST archives fresh without writing a local cache."""
     base_url = "https://codh.rois.ac.jp/kmnist/dataset/kmnist"
-    cache_dir = Path(get_data_home()) / "kmnist"
-    cache_dir.mkdir(parents=True, exist_ok=True)
 
     def load_archive(filename: str) -> np.ndarray:
-        path = cache_dir / filename
-        if not path.exists():
-            temporary_path = path.with_suffix(path.suffix + ".tmp")
-            try:
-                urlretrieve(f"{base_url}/{filename}", temporary_path)
-                temporary_path.replace(path)
-            finally:
-                temporary_path.unlink(missing_ok=True)
-        with np.load(path) as archive:
+        with urlopen(f"{base_url}/{filename}") as response:
+            archive_bytes = BytesIO(response.read())
+        with np.load(archive_bytes) as archive:
             return np.asarray(archive["arr_0"])
 
     images = np.concatenate(
