@@ -478,11 +478,15 @@ def global_position_metrics(datasets, embeddings, *, seed=42):
     return pd.DataFrame(rows)
 
 
-def umap_sensitivity_metrics(datasets, *, seed=42, neighbors=(10, 20, 40)):
+def umap_sensitivity_metrics(
+    datasets, *, seed=42, neighbors=(10, 20, 40), metric="euclidean"
+):
     rows = []
     for name, data in datasets.items():
         for n_neighbors in neighbors:
-            coordinates = make_umap(random_state=seed, n_neighbors=n_neighbors).fit_transform(data["X"])
+            coordinates = make_umap(
+                random_state=seed, n_neighbors=n_neighbors, metric=metric
+            ).fit_transform(data["X"])
             rho, tau, overlap = population_position_scores(data["X"], coordinates, data["labels"])
             rows.append({
                 "dataset": name,
@@ -495,14 +499,20 @@ def umap_sensitivity_metrics(datasets, *, seed=42, neighbors=(10, 20, 40)):
     return pd.DataFrame(rows)
 
 
-def seed_robustness_metrics(datasets, *, seeds=(7, 123), n_epochs=1000, n_msts=5):
+def seed_robustness_metrics(
+    datasets, *, seeds=(7, 123), n_epochs=1000, n_msts=5, metric="euclidean"
+):
     rows = []
     for name, data in datasets.items():
         for seed in seeds:
             for method in ("IMSTE", "UMAP"):
                 reducer = (
-                    make_imste(random_state=seed, n_epochs=n_epochs, n_msts=n_msts)
-                    if method == "IMSTE" else make_umap(random_state=seed)
+                    make_imste(
+                        random_state=seed, n_epochs=n_epochs, n_msts=n_msts,
+                        metric=metric,
+                    )
+                    if method == "IMSTE"
+                    else make_umap(random_state=seed, metric=metric)
                 )
                 coordinates = reducer.fit_transform(data["X"])
                 rho, tau, overlap = population_position_scores(data["X"], coordinates, data["labels"])

@@ -197,7 +197,7 @@ def load_arxiv_dataset(data_dir: str | Path) -> tuple[pd.DataFrame, np.ndarray, 
     manifest = _read_manifest(paths["manifest"])
     if manifest is None or not paths["papers"].is_file() or not paths["vectors"].is_file():
         raise FileNotFoundError(
-            "No prepared arXiv cache exists. Run 03a_prepare_arxiv_dataset.ipynb first."
+            "No prepared arXiv cache exists. Run data/arxiv/prepare_arxiv_dataset.ipynb first."
         )
     papers = pd.read_pickle(paths["papers"])
     vectors = np.load(paths["vectors"], mmap_mode="r")

@@ -386,7 +386,7 @@ examples to controlled and biological IMSTE–UMAP comparisons:
    evaluate annotated Paul15 and PBMC3k single-cell datasets, then compare
    GSE52529 myoblast embeddings by observed differentiation time and calculate
    diffusion pseudotime from the GEO FPKM matrix.
-4. [03a — Prepare the arXiv dataset](notebooks/03a_prepare_arxiv_dataset.ipynb):
+4. [Prepare the arXiv dataset](data/arxiv/prepare_arxiv_dataset.ipynb):
    download or reuse the Kaggle metadata, then create one reusable paper-vector
    cache. Increase its size by replacing the existing cache; smaller selections
    reuse a prefix without writing another dataset copy.
