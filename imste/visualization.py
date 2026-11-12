@@ -195,6 +195,7 @@ def render_datashader_embedding(
     height: int = 1000,
     x_range: tuple[float, float] | None = None,
     y_range: tuple[float, float] | None = None,
+    preserve_aspect: bool = False,
     how: str = "eq_hist",
     min_alpha: int = 40,
     background: str = "white",
@@ -218,7 +219,9 @@ def render_datashader_embedding(
     every rendered mark by a fixed number of pixels on each side. Alternatively,
     set ``max_spread_px`` above zero for density-aware spreading, which stops
     once the requested local pixel density is reached. Only one spread mode may
-    be enabled at a time.
+    be enabled at a time. Set ``preserve_aspect`` to use the same pixel scale
+    for both coordinate axes; this may add empty canvas margins to avoid
+    stretching the embedding.
     """
     coordinates = _embedding_array(embedding)
     if coordinates.ndim != 2 or coordinates.shape[1] != 2:
@@ -266,6 +269,29 @@ def render_datashader_embedding(
             or value[0] >= value[1]
         ):
             raise ValueError(f"{name} must contain two finite increasing values.")
+
+    if not isinstance(preserve_aspect, (bool, np.bool_)):
+        raise ValueError("preserve_aspect must be a boolean.")
+    if preserve_aspect:
+        x_limits = np.asarray(
+            x_range if x_range is not None else (coordinates[:, 0].min(), coordinates[:, 0].max()),
+            dtype=np.float64,
+        )
+        y_limits = np.asarray(
+            y_range if y_range is not None else (coordinates[:, 1].min(), coordinates[:, 1].max()),
+            dtype=np.float64,
+        )
+        pixel_scale = max(
+            (x_limits[1] - x_limits[0]) / int(width),
+            (y_limits[1] - y_limits[0]) / int(height),
+            np.finfo(np.float64).eps,
+        )
+        x_center = float(x_limits.mean())
+        y_center = float(y_limits.mean())
+        x_half_span = pixel_scale * int(width) / 2
+        y_half_span = pixel_scale * int(height) / 2
+        x_range = (x_center - x_half_span, x_center + x_half_span)
+        y_range = (y_center - y_half_span, y_center + y_half_span)
 
     try:
         import datashader as ds
