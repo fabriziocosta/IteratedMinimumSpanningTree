@@ -173,6 +173,7 @@ def run_high_dim_mst_gallery(
     n_msts: int = 4,
     n_epochs: int = 200,
     mst_method: str = "famst",
+    metric: str = "euclidean",
     negative_ratio: int = 1,
     mst_max_neighbors: int | None = 15,
     lambda_rep: float = 0.5,
@@ -196,7 +197,8 @@ def run_high_dim_mst_gallery(
     ``plot_sample_images=False`` to skip the per-class image grids.
     ``negative_ratio`` controls sampled
     non-neighbors per endpoint of a positive edge, and ``mst_max_neighbors``
-    caps FAMST's approximate-neighbor search. Multilevel initialization is
+    caps FAMST's approximate-neighbor search. ``metric`` selects Euclidean or
+    cosine graph distances; cosine uses exact Prim construction. Multilevel initialization is
     enabled by default for this gallery and can be configured with the
     ``multilevel_*`` options.
     """
@@ -204,6 +206,8 @@ def run_high_dim_mst_gallery(
         raise ValueError("max_samples must be at least 10.")
     if mst_method not in {"prim", "famst"}:
         raise ValueError("mst_method must be either 'prim' or 'famst'.")
+    if metric not in {"euclidean", "cosine"}:
+        raise ValueError("metric must be either 'euclidean' or 'cosine'.")
     if (
         isinstance(sample_plot_rows, (bool, np.bool_))
         or not isinstance(sample_plot_rows, numbers.Integral)
@@ -225,7 +229,8 @@ def run_high_dim_mst_gallery(
                 random_state=random_state,
             )
         print(
-            f"Fitting {name} with {mst_method.upper()} on {resolved_device} ...",
+            f"Fitting {name} with {mst_method.upper()} ({metric}) on "
+            f"{resolved_device} ...",
             flush=True,
         )
         pipeline = Pipeline(
@@ -238,6 +243,7 @@ def run_high_dim_mst_gallery(
                         n_components=2,
                         n_epochs=n_epochs,
                         mst_method=mst_method,
+                        metric=metric,
                         mst_max_neighbors=mst_max_neighbors,
                         learning_rate=0.05,
                         negative_ratio=negative_ratio,
@@ -275,6 +281,7 @@ def run_high_dim_mst_gallery(
                 "classes": len(np.unique(labels)),
                 "n_msts": n_msts,
                 "mst_method": mst_method,
+                "metric": metric,
                 "mst_max_neighbors": mst_max_neighbors,
                 "n_epochs": n_epochs,
                 "negative_ratio": negative_ratio,
@@ -303,13 +310,13 @@ def run_high_dim_mst_gallery(
             )
             graph_description = (
                 "approximate FAMST graph"
-                if mst_method == "famst"
+                if mst_method == "famst" and metric == "euclidean"
                 else "exact Prim graph"
             )
             ax.set_title(
                 f"{name} — {len(X):,} samples × "
                 f"{feature_count:,} features passed to IMSTE; "
-                f"{graph_description}; {mst_summary}; "
+                f"{graph_description} ({metric}); {mst_summary}; "
                 f"{n_epochs} epochs; {elapsed:.2f} s"
             )
             ax.set_xlabel("Embedding dimension 1")

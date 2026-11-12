@@ -681,8 +681,18 @@ def iterated_famst_edges(
     *,
     neighbor_device: str = "cpu",
     return_ranks: bool = False,
+    metric: str = "euclidean",
 ) -> tuple[np.ndarray, np.ndarray]:
     """Build ranked trees from an adaptive sparse neighbor graph."""
+    if metric == "cosine":
+        # FAMST's candidate refinement kernels are Euclidean-specific. Use
+        # exact Prim to preserve cosine semantics throughout graph building.
+        from .prim import iterated_prim_edges
+
+        return iterated_prim_edges(
+            X, n_msts, progress_callback=progress_callback,
+            return_ranks=return_ranks, metric=metric,
+        )
     if issparse(X):
         X = csr_matrix(X)
     n_samples = X.shape[0]
@@ -691,7 +701,7 @@ def iterated_famst_edges(
 
         return iterated_prim_edges(
             X, n_msts, progress_callback=progress_callback,
-            return_ranks=return_ranks,
+            return_ranks=return_ranks, metric=metric,
         )
 
     rng = np.random.RandomState(random_state)
@@ -716,7 +726,7 @@ def iterated_famst_edges(
 
             return iterated_prim_edges(
                 X, n_msts, progress_callback=progress_callback,
-                return_ranks=return_ranks,
+                return_ranks=return_ranks, metric=metric,
             )
         detail = f"FAMST ({current_neighbors} neighbors)"
         if progress_callback is not None:

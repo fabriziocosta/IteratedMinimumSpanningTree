@@ -1,4 +1,4 @@
-"""Exact dense Prim construction for iterated Euclidean spanning trees."""
+"""Exact Prim construction for iterated spanning trees."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ from collections.abc import Callable
 import numpy as np
 from scipy.spatial.distance import cdist
 from scipy.sparse import csr_matrix, issparse
+from sklearn.metrics import pairwise_distances
 from sklearn.metrics.pairwise import euclidean_distances
 
 
@@ -16,6 +17,7 @@ def iterated_prim_edges(
     progress_callback: Callable[[int, int, str], None] | None = None,
     *,
     return_ranks: bool = False,
+    metric: str = "euclidean",
 ) -> tuple[np.ndarray, np.ndarray]:
     """Return exact trees using dense Prim, reusing bottleneck edges as needed.
 
@@ -24,9 +26,14 @@ def iterated_prim_edges(
     """
     if issparse(X):
         return _iterated_sparse_prim_edges(
-            csr_matrix(X), n_msts, progress_callback, return_ranks=return_ranks
+            csr_matrix(X), n_msts, progress_callback, return_ranks=return_ranks,
+            metric=metric,
         )
-    distances = cdist(X, X, metric="euclidean")
+    distances = (
+        cdist(X, X, metric="euclidean")
+        if metric == "euclidean"
+        else pairwise_distances(X, metric=metric)
+    )
     if not np.isfinite(distances).all():
         raise ValueError("Pairwise distances overflowed; rescale X before fitting.")
     np.fill_diagonal(distances, 0.0)
@@ -42,6 +49,7 @@ def _iterated_sparse_prim_edges(
     progress_callback: Callable[[int, int, str], None] | None = None,
     *,
     return_ranks: bool = False,
+    metric: str = "euclidean",
 ) -> tuple[np.ndarray, np.ndarray]:
     """Exact Prim over CSR rows without forming an all-pairs matrix."""
     n_samples = X.shape[0]
@@ -52,7 +60,10 @@ def _iterated_sparse_prim_edges(
     ranks: list[int] = []
 
     def squared_distances_from(sample: int) -> np.ndarray:
-        values = euclidean_distances(X[sample], X, squared=True).ravel()
+        if metric == "euclidean":
+            values = euclidean_distances(X[sample], X, squared=True).ravel()
+        else:
+            values = pairwise_distances(X[sample], X, metric=metric).ravel()
         if not np.isfinite(values).all():
             raise ValueError("Pairwise distances overflowed; rescale X before fitting.")
         return values

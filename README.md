@@ -47,8 +47,9 @@ result through `embedding_` rather than `transform()`.
 
 ## Quick start
 
-IMSTE uses Euclidean distances to build its graph. Scale features first when
-they have different ranges. This small example uses scikit-learn's built-in
+IMSTE uses Euclidean distance by default and also supports cosine distance
+with `metric="cosine"`. Scale features first when they have different ranges.
+This small example uses scikit-learn's built-in
 digits dataset, so it does not need a download:
 
 ```python
@@ -66,6 +67,7 @@ X = StandardScaler().fit_transform(digits.data[rows])
 mapper = IteratedMinimumSpanningTreeEmbedder(
     n_msts=5,
     n_epochs=300,
+    metric="cosine",
     random_state=42,
 )
 embedding = mapper.fit_transform(X)
@@ -107,7 +109,9 @@ the residual components. Every reuse increments that edge's rank, lowering its
 attraction weight to `1 / rank`. The requested `n_msts` is therefore the number
 of tree iterations, not a promise that every edge is unique across trees. The
 result is approximate and is not guaranteed to match the trees from the
-complete Euclidean graph. The sparse mode also samples negative pairs without
+complete graph for the selected metric. Cosine metric uses exact Prim even
+when `mst_method="famst"`, since FAMST's refinement is Euclidean-specific.
+The sparse mode also samples negative pairs without
 allocating the core estimator's quadratic adjacency bit matrix. The
 implementation follows Almansoori and Telek's
 [FAMST paper](https://arxiv.org/abs/2507.14261).
@@ -119,7 +123,7 @@ score a visualization if needed.
 
 ### Build a graph
 
-The estimator computes pairwise Euclidean distances, constructs `n_msts`
+The estimator computes pairwise distances using `metric`, constructs `n_msts`
 spanning-tree iterations, and joins their ranked edges into one graph. An edge
 used for the first time receives that tree's rank. When a bottleneck requires
 reusing it, its rank increments by one, so the repeated edge receives less
@@ -290,6 +294,7 @@ error. The per-edge maximum and component pairs remain available for review.
 | `epsilon` | `1e-4` | Smoothing for the logarithmic attraction |
 | `random_state` | `42` | Seed for initialization, shuffling, and sampling |
 | `device` | `"auto"` | `"auto"` and `"cpu"` select CPU; `"mps"` selects Apple's PyTorch GPU backend |
+| `metric` | `"euclidean"` | Feature distance for the graph: `"euclidean"` or `"cosine"` |
 | `mst_method` | `"famst"` | Sparse approximate `"famst"` or exact dense `"prim"` |
 | `mst_neighbors` | `15` | Initial candidate neighbors for FAMST |
 | `mst_inter_component_edges` | `5` | Candidate connections per FAMST component pair |
@@ -381,11 +386,17 @@ examples to controlled and biological IMSTE–UMAP comparisons:
    evaluate annotated Paul15 and PBMC3k single-cell datasets, then compare
    GSE52529 myoblast embeddings by observed differentiation time and calculate
    diffusion pseudotime from the GEO FPKM matrix.
-4. [03 — arXiv large-dataset comparison](notebooks/03_arxiv_large_dataset_comparison.ipynb):
-   download the arXiv metadata from Kaggle, create a sampled text-embedding
-   dataset, and compare IMSTE with UMAP using Datashader for dense plots.
+4. [03a — Prepare the arXiv dataset](notebooks/03a_prepare_arxiv_dataset.ipynb):
+   download or reuse the Kaggle metadata, then create one reusable paper-vector
+   cache. Increase its size by replacing the existing cache; smaller selections
+   reuse a prefix without writing another dataset copy.
+5. [03 — arXiv large-dataset comparison](notebooks/03_arxiv_large_dataset_comparison.ipynb):
+   consume the prepared vectors, reuse or fit UMAP and IMSTE coordinates, and
+   save a projection cache for interactive exploration.
+6. [04 — Interactive embedding rendering](notebooks/04_interactive_embedding_rendering.ipynb):
+   interactively render cached MNIST-family and arXiv embeddings with Datashader.
 
-Earlier exploratory and interactive notebooks are in
+Earlier exploratory notebooks are in
 [notebooks/archive](notebooks/archive/). This includes the [interactive 2D
 embedding](notebooks/archive/digits_2d_interactive.ipynb), [interactive 3D
 embedding](notebooks/archive/digits_3d_interactive.ipynb), [parameter

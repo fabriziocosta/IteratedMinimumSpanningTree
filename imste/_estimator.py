@@ -314,6 +314,9 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
         to connect a residual bottleneck, incrementing its rank for each reuse.
         FAMST uses PyNNDescent on CPU and exact chunked nearest-neighbor search
         on MPS when ``device='mps'``.
+    metric : {'euclidean', 'cosine'}, default='euclidean'
+        Feature distance used to construct the spanning-tree graph. Cosine
+        distance with FAMST uses the exact Prim backend.
     mst_neighbors : int, default=15
         Minimum initial approximate-neighbor count for ``mst_method='famst'``.
         FAMST targets the larger of this value and ``2 * n_msts``, subject to
@@ -365,6 +368,7 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
         multilevel_reduction_ratio: int = 4,
         multilevel_base_size: int = 1024,
         multilevel_epochs: int = 10,
+        metric: str = "euclidean",
     ) -> None:
         self.n_msts = n_msts
         self.n_components = n_components
@@ -392,6 +396,7 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
         self.multilevel_reduction_ratio = multilevel_reduction_ratio
         self.multilevel_base_size = multilevel_base_size
         self.multilevel_epochs = multilevel_epochs
+        self.metric = metric
 
     def _validated_fit_options(self) -> dict[str, object]:
         n_msts = _positive_integer("n_msts", self.n_msts)
@@ -425,6 +430,8 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
         )
         if self.mst_method not in {"prim", "famst"}:
             raise ValueError("mst_method must be either 'prim' or 'famst'.")
+        if self.metric not in {"euclidean", "cosine"}:
+            raise ValueError("metric must be either 'euclidean' or 'cosine'.")
         learning_rate = _finite_nonnegative(
             "learning_rate", self.learning_rate, strictly_positive=True
         )
@@ -479,6 +486,7 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
             "multilevel_epochs": multilevel_epochs,
             "pca_init_scaling": self.pca_init_scaling,
             "resolved_device": resolved_device,
+            "metric": self.metric,
         }
 
     def _fit_edges(
@@ -757,6 +765,7 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
             neighbor_device=options["resolved_device"],
             progress_callback=self.mst_progress_callback,
             return_ranks=True,
+            metric=options["metric"],
         )
         tree_ranks = np.asarray(tree_ranks, dtype=np.int32)
         self.graph_construction_time_ = time.perf_counter() - graph_started
