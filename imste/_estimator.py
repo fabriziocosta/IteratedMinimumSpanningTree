@@ -390,6 +390,14 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
         Maximum local force step as a fraction of each point's local scale.
     gravity_iterations : int, default=3
         Number of local-force refinement iterations.
+    gravity_pack_regions : bool, default=False
+        After gravity, translate each Leiden region as a rigid group onto a
+        compact ring. This preserves within-region distances but changes
+        distances between regions.
+    gravity_pack_radius_quantile : float, default=0.9
+        Within-region radial quantile used to estimate each region's ring size.
+    gravity_pack_gap_fraction : float, default=0.25
+        Gap between ring regions as a fraction of their median estimated radius.
     mst_inter_component_edges : int, default=5
         FAMST candidate edges retained between each component pair selected by
         the representative MST.
@@ -457,6 +465,9 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
         gravity_repulsion_range: float = 0.5,
         gravity_step_size: float = 0.05,
         gravity_iterations: int = 3,
+        gravity_pack_regions: bool = False,
+        gravity_pack_radius_quantile: float = 0.9,
+        gravity_pack_gap_fraction: float = 0.25,
     ) -> None:
         self.n_msts = n_msts
         self.n_components = n_components
@@ -504,6 +515,9 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
         self.gravity_repulsion_range = gravity_repulsion_range
         self.gravity_step_size = gravity_step_size
         self.gravity_iterations = gravity_iterations
+        self.gravity_pack_regions = gravity_pack_regions
+        self.gravity_pack_radius_quantile = gravity_pack_radius_quantile
+        self.gravity_pack_gap_fraction = gravity_pack_gap_fraction
 
     def _validated_fit_options(self) -> dict[str, object]:
         if not isinstance(self.verbose, (bool, np.bool_)):
@@ -616,6 +630,16 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
         gravity_step_size = _finite_nonnegative(
             "gravity_step_size", self.gravity_step_size
         )
+        if not isinstance(self.gravity_pack_regions, (bool, np.bool_)):
+            raise ValueError("gravity_pack_regions must be a boolean.")
+        gravity_pack_radius_quantile = _finite_nonnegative(
+            "gravity_pack_radius_quantile", self.gravity_pack_radius_quantile
+        )
+        if not 0.0 < gravity_pack_radius_quantile < 1.0:
+            raise ValueError("gravity_pack_radius_quantile must be between 0 and 1.")
+        gravity_pack_gap_fraction = _finite_nonnegative(
+            "gravity_pack_gap_fraction", self.gravity_pack_gap_fraction
+        )
         learning_rate = _finite_nonnegative(
             "learning_rate", self.learning_rate, strictly_positive=True
         )
@@ -686,6 +710,9 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
             "gravity_repulsion_range": gravity_repulsion_range,
             "gravity_step_size": gravity_step_size,
             "gravity_iterations": gravity_iterations,
+            "gravity_pack_regions": bool(self.gravity_pack_regions),
+            "gravity_pack_radius_quantile": gravity_pack_radius_quantile,
+            "gravity_pack_gap_fraction": gravity_pack_gap_fraction,
         }
 
     def _activate_progress_reporting(self) -> None:
@@ -1124,6 +1151,8 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
                     "gravity_near_repulsion_strength", "gravity_force_neighbors",
                     "gravity_attraction_range", "gravity_repulsion_range",
                     "gravity_step_size", "gravity_iterations",
+                    "gravity_pack_regions", "gravity_pack_radius_quantile",
+                    "gravity_pack_gap_fraction",
                 }
             },
         )
@@ -1134,6 +1163,7 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
                 raise ValueError("gravity refinement currently requires dense features.")
             if n_samples < 3:
                 self.gravity_region_count_ = 0
+                self.gravity_regions_packed_ = False
                 self.gravity_graph_construction_time_ = 0.0
                 self.gravity_force_time_ = 0.0
                 self.gravity_time_ = 0.0
@@ -1163,12 +1193,16 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
                 repulsion_range=options["gravity_repulsion_range"],
                 step_size=options["gravity_step_size"],
                 iterations=options["gravity_iterations"],
+                pack_regions=options["gravity_pack_regions"],
+                pack_radius_quantile=options["gravity_pack_radius_quantile"],
+                pack_gap_fraction=options["gravity_pack_gap_fraction"],
             )
             self.embedding_ = self.embedding_before_gravity_.copy()
             self.embedding_[:, :2] = gravity_embedding
             self.gravity_membership_ = gravity_diagnostics["membership"]
             self.gravity_point_mass_ = gravity_diagnostics["point_mass"]
             self.gravity_region_count_ = int(gravity_diagnostics["region_count"])
+            self.gravity_regions_packed_ = bool(gravity_diagnostics["regions_packed"])
             self.gravity_graph_construction_time_ = float(
                 gravity_diagnostics["graph_seconds"]
             )
@@ -1176,6 +1210,7 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
             self.gravity_time_ = time.perf_counter() - gravity_started
         else:
             self.gravity_region_count_ = 0
+            self.gravity_regions_packed_ = False
             self.gravity_graph_construction_time_ = 0.0
             self.gravity_force_time_ = 0.0
             self.gravity_time_ = 0.0
@@ -1327,12 +1362,16 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
                     repulsion_range=options["gravity_repulsion_range"],
                     step_size=options["gravity_step_size"],
                     iterations=options["gravity_iterations"],
+                    pack_regions=options["gravity_pack_regions"],
+                    pack_radius_quantile=options["gravity_pack_radius_quantile"],
+                    pack_gap_fraction=options["gravity_pack_gap_fraction"],
                 )
                 self.embedding_ = self.embedding_before_gravity_.copy()
                 self.embedding_[:, :2] = gravity_embedding
                 self.gravity_membership_ = diagnostics["membership"]
                 self.gravity_point_mass_ = diagnostics["point_mass"]
                 self.gravity_region_count_ = int(diagnostics["region_count"])
+                self.gravity_regions_packed_ = bool(diagnostics["regions_packed"])
                 self.gravity_graph_construction_time_ = float(
                     diagnostics["graph_seconds"]
                 )
@@ -1342,11 +1381,13 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
                     del self.gravity_skipped_reason_
             else:
                 self.gravity_region_count_ = 0
+                self.gravity_regions_packed_ = False
                 self.gravity_graph_construction_time_ = 0.0
                 self.gravity_force_time_ = 0.0
                 self.gravity_time_ = 0.0
         else:
             self.gravity_region_count_ = 0
+            self.gravity_regions_packed_ = False
             self.gravity_graph_construction_time_ = 0.0
             self.gravity_force_time_ = 0.0
             self.gravity_time_ = 0.0

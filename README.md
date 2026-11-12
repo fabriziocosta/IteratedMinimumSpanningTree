@@ -312,6 +312,22 @@ error. The per-edge maximum and component pairs remain available for review.
 | `mst_neighbor_backend` | `"auto"` | `"auto"`, `"rinnd"`, `"pynndescent"`, or `"mps_exact"` FAMST neighbor search |
 | `mst_neighbors` | `15` | Initial candidate neighbors for FAMST |
 | `include_knn_attraction` | `False` | Also attract along FAMST candidate-neighbor edges in Euclidean `fit(X)` |
+| `gravity_mode` | `"mexican_hat"` | Optional density-aware second phase; set to `None` to disable |
+| `gravity_neighbors` | `15` | Feature-space neighbors for the RINND/Leiden region graph |
+| `gravity_resolution` | `0.8` | Leiden partition resolution |
+| `gravity_strength` | `0.2` | Density-core attraction strength |
+| `gravity_core_quantile` | `0.95` | Within-region density quantile defining the core |
+| `gravity_mass_power` | `0.5` | Exponent controlling point and region mass effects |
+| `gravity_attraction_strength` | `0.5` | Attraction strength for local Mexican-hat forces |
+| `gravity_near_repulsion_strength` | `2.5` | Repulsion strength for close embedded neighbors |
+| `gravity_force_neighbors` | `8` | Embedded neighbors used by the local force |
+| `gravity_attraction_range` | `1.0` | Attraction radius relative to local embedded neighbor distance |
+| `gravity_repulsion_range` | `0.5` | Repulsion radius relative to local embedded neighbor distance |
+| `gravity_step_size` | `0.05` | Maximum force step as a fraction of local scale |
+| `gravity_iterations` | `3` | Local-force refinement iterations |
+| `gravity_pack_regions` | `False` | After gravity, translate Leiden regions onto a compact ring while preserving each region's internal shape |
+| `gravity_pack_radius_quantile` | `0.9` | Quantile used to estimate region radii for ring packing |
+| `gravity_pack_gap_fraction` | `0.25` | Gap between packed regions as a fraction of their median radius |
 | `mst_inter_component_edges` | `5` | Candidate connections per FAMST component pair |
 | `mst_representatives_per_component` | `10` | Maximum representatives per component for selecting FAMST bridge pairs |
 | `mst_max_neighbors` | `None` | FAMST neighbor cap; defaults to four times `mst_neighbors` |
@@ -341,6 +357,12 @@ embedding = mapper.fit_transform(X)
 ```
 The coordinate rows must correspond to `X` in the same order. Explicit
 coordinates take precedence over `pca_init` and are used at their supplied scale.
+
+Gravity is an optional second phase for dense Euclidean inputs with at least
+two embedding dimensions. Its Leiden regions can be translated onto a compact
+ring with `gravity_pack_regions=True`. This rigid translation preserves
+within-region distances, but changes distances between regions; use it when a
+compact region view is more useful than preserving the fitted global layout.
 
 Set `multilevel_init=True` to initialize from the fitted ranked graph instead.
 The initializer scores graph edges by inverse rank, coarsens each connected

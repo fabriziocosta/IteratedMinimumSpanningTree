@@ -206,6 +206,9 @@ def run_high_dim_mst_gallery(
     gravity_repulsion_range: float = 0.5,
     gravity_step_size: float = 0.05,
     gravity_iterations: int = 3,
+    gravity_pack_regions: bool = False,
+    gravity_pack_radius_quantile: float = 0.9,
+    gravity_pack_gap_fraction: float = 0.25,
 ) -> dict[str, object]:
     """Fit and display 2D IMSTE embeddings for several image datasets.
 
@@ -301,6 +304,9 @@ def run_high_dim_mst_gallery(
                         gravity_repulsion_range=gravity_repulsion_range,
                         gravity_step_size=gravity_step_size,
                         gravity_iterations=gravity_iterations,
+                        gravity_pack_regions=gravity_pack_regions,
+                        gravity_pack_radius_quantile=gravity_pack_radius_quantile,
+                        gravity_pack_gap_fraction=gravity_pack_gap_fraction,
                     ),
                 ),
             ]
@@ -363,7 +369,11 @@ def run_high_dim_mst_gallery(
                 "gravity_repulsion_range": estimator.gravity_repulsion_range,
                 "gravity_step_size": estimator.gravity_step_size,
                 "gravity_iterations": estimator.gravity_iterations,
+                "gravity_pack_regions": estimator.gravity_pack_regions,
+                "gravity_pack_radius_quantile": estimator.gravity_pack_radius_quantile,
+                "gravity_pack_gap_fraction": estimator.gravity_pack_gap_fraction,
                 "gravity_region_count": estimator.gravity_region_count_,
+                "gravity_regions_packed": estimator.gravity_regions_packed_,
                 "gravity_seconds": estimator.gravity_time_,
                 "imste_seconds": estimator.imste_fit_time_,
                 "unique_graph_edges": len(estimator.graph_edges_),

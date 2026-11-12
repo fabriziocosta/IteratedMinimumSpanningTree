@@ -88,6 +88,57 @@ def apply_local_mexican_hat_force(
     return coordinates.astype(np.float32)
 
 
+def pack_region_centers_on_ring(
+    embedding: object,
+    membership: object,
+    *,
+    radius_quantile: float = 0.9,
+    gap_fraction: float = 0.25,
+) -> np.ndarray:
+    """Translate regions onto a compact ring while preserving within-region shape."""
+    coordinates = np.asarray(embedding, dtype=np.float64)
+    membership = np.asarray(membership, dtype=np.int64).reshape(-1)
+    if coordinates.ndim != 2 or coordinates.shape[1] != 2:
+        raise ValueError("embedding must have shape (n_samples, 2).")
+    if membership.shape != (len(coordinates),):
+        raise ValueError("membership must contain one region id per embedded point.")
+    if not np.isfinite(coordinates).all():
+        raise ValueError("embedding must contain only finite coordinates.")
+    if not np.isfinite(radius_quantile) or not 0.0 < radius_quantile < 1.0:
+        raise ValueError("radius_quantile must be between 0 and 1, exclusive.")
+    if not np.isfinite(gap_fraction) or gap_fraction < 0.0:
+        raise ValueError("gap_fraction must be finite and nonnegative.")
+
+    _, membership = np.unique(membership, return_inverse=True)
+    region_count = int(membership.max()) + 1 if len(membership) else 0
+    if region_count < 2:
+        return coordinates.astype(np.float32)
+
+    counts = np.bincount(membership, minlength=region_count)
+    centers = np.zeros((region_count, 2), dtype=np.float64)
+    np.add.at(centers, membership, coordinates)
+    centers /= counts[:, None]
+    radii = np.empty(region_count, dtype=np.float64)
+    for region in range(region_count):
+        offsets = coordinates[membership == region] - centers[region]
+        radii[region] = np.quantile(np.linalg.norm(offsets, axis=1), radius_quantile)
+
+    gap = gap_fraction * float(np.median(radii))
+    ring_radius = float(np.sum(2.0 * radii + gap) / (2.0 * np.pi))
+    global_center = np.average(centers, axis=0, weights=counts)
+    angles = np.arctan2(
+        centers[:, 1] - global_center[1], centers[:, 0] - global_center[0]
+    )
+    order = np.argsort(angles)
+    targets = np.zeros_like(centers)
+    for position, region in enumerate(order):
+        angle = 2.0 * np.pi * position / region_count
+        targets[region] = ring_radius * np.array([np.cos(angle), np.sin(angle)])
+    packed = coordinates + targets[membership] - centers[membership]
+    packed -= np.average(packed, axis=0)
+    return packed.astype(np.float32)
+
+
 def density_gravity_layout(
     features: object,
     embedding: object,
@@ -106,6 +157,9 @@ def density_gravity_layout(
     repulsion_range: float = 0.5,
     step_size: float = 0.05,
     iterations: int = 3,
+    pack_regions: bool = False,
+    pack_radius_quantile: float = 0.9,
+    pack_gap_fraction: float = 0.25,
 ) -> tuple[np.ndarray, dict[str, object]]:
     """Build feature-space density regions and refine an IMSTE layout.
 
@@ -120,6 +174,8 @@ def density_gravity_layout(
 
     if mode not in {"density_core", "mexican_hat"}:
         raise ValueError("mode must be 'density_core' or 'mexican_hat'.")
+    if not isinstance(pack_regions, (bool, np.bool_)):
+        raise ValueError("pack_regions must be a boolean.")
     if issparse(features):
         raise ValueError("gravity refinement currently requires dense features.")
     X = np.asarray(features, dtype=np.float32)
@@ -234,6 +290,13 @@ def density_gravity_layout(
             iterations=iterations,
             mass_power=mass_power,
         )
+    if pack_regions:
+        result = pack_region_centers_on_ring(
+            result,
+            membership,
+            radius_quantile=pack_radius_quantile,
+            gap_fraction=pack_gap_fraction,
+        )
     result = np.asarray(result, dtype=np.float64)
     result -= result.mean(axis=0)
     result = result.astype(np.float32)
@@ -246,4 +309,5 @@ def density_gravity_layout(
         "region_count": region_count,
         "graph_seconds": graph_seconds,
         "force_seconds": force_seconds,
+        "regions_packed": bool(pack_regions and region_count > 1),
     }
