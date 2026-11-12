@@ -305,6 +305,13 @@ error. The per-edge maximum and component pairs remain available for review.
 | `mst_representatives_per_component` | `10` | Maximum representatives per component for selecting FAMST bridge pairs |
 | `mst_max_neighbors` | `None` | FAMST neighbor cap; defaults to four times `mst_neighbors` |
 
+Fitted estimators expose `graph_construction_time_`,
+`multilevel_initialization_time_`, `final_embedding_optimization_time_`,
+`embedding_optimization_time_`, and `fit_time_` in seconds. With `verbose=True`,
+the fit summary reports each macro phase separately. MPS negative sampling and
+coordinate updates are timed together to avoid per-batch Metal event recording
+on long fits.
+
 By default, `fit(X)` starts coordinate optimization from PCA scores computed
 after feature-wise standardization and uniformly scaled by the maximum absolute
 score into `[-1, 1]`. This preserves the relative scale between PCA axes. Set

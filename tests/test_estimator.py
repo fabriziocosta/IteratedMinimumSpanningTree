@@ -40,12 +40,14 @@ def test_sklearn_api_and_training_transform():
 
 def test_fit_timing_diagnostics_are_finite_and_bounded():
     estimator = IteratedMinimumSpanningTreeEmbedder(
-        n_msts=1, n_epochs=0, random_state=5
+        n_msts=1, n_epochs=0, random_state=5, multilevel_init=True
     ).fit(small_data())
 
     timings = np.array(
         [
             estimator.graph_construction_time_,
+            estimator.multilevel_initialization_time_,
+            estimator.final_embedding_optimization_time_,
             estimator.embedding_optimization_time_,
             estimator.fit_time_,
         ]
@@ -53,10 +55,23 @@ def test_fit_timing_diagnostics_are_finite_and_bounded():
     assert np.isfinite(timings).all()
     assert np.all(timings >= 0)
     assert estimator.graph_construction_time_ <= estimator.fit_time_
+    assert (
+        estimator.multilevel_initialization_time_
+        <= estimator.embedding_optimization_time_
+    )
+    assert (
+        estimator.final_embedding_optimization_time_
+        <= estimator.embedding_optimization_time_
+    )
     assert estimator.embedding_optimization_time_ <= estimator.fit_time_
     assert (
         estimator.graph_construction_time_ + estimator.embedding_optimization_time_
         <= estimator.fit_time_
+    )
+    assert (
+        estimator.multilevel_initialization_time_
+        + estimator.final_embedding_optimization_time_
+        <= estimator.embedding_optimization_time_
     )
 
 

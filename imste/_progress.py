@@ -130,8 +130,22 @@ class IMSTEProgressReporter:
         self.log("Finished embedding")
         self.log("=== Timing Breakdown ===")
         self.log(f"MST graph construction: {estimator.graph_construction_time_:.3f}s")
+        self.log(
+            "Multilevel initialization: "
+            f"{estimator.multilevel_initialization_time_:.3f}s"
+        )
+        self.log(
+            "Final embedding optimization: "
+            f"{estimator.final_embedding_optimization_time_:.3f}s"
+        )
         self.log(f"Embedding optimization: {estimator.embedding_optimization_time_:.3f}s")
-        self.log(f"  Negative sampling: {estimator.optimizer_negative_sampling_time_:.3f}s")
-        self.log(f"  Coordinate updates: {estimator.optimizer_coordinate_update_time_:.3f}s")
+        if estimator.device_ == "mps":
+            self.log(
+                "  Final MPS negative sampling and coordinate updates: "
+                f"{estimator.optimizer_coordinate_update_time_:.3f}s combined"
+            )
+        else:
+            self.log(f"  Negative sampling: {estimator.optimizer_negative_sampling_time_:.3f}s")
+            self.log(f"  Coordinate updates: {estimator.optimizer_coordinate_update_time_:.3f}s")
         self.log(f"Total measured: {estimator.fit_time_:.3f}s")
         self.log("Multilevel initialization is included in embedding optimization.")

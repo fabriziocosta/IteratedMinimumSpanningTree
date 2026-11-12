@@ -159,9 +159,6 @@ def optimize_embedding_mps(
         adjacency_keys_cpu, dtype=torch.long, device=device
     )
     seed_rng = np.random.RandomState(random_state)
-    sampling_events = []
-    update_events = []
-    use_device_events = timing_callback is not None and hasattr(torch.mps, "Event")
     optimizer_started = perf_counter()
 
     for epoch in range(n_epochs):
@@ -191,12 +188,6 @@ def optimize_embedding_mps(
                 active_batch, dtype=torch.long, device=device
             )
             active_pairs = edge_tensor.index_select(0, active_tensor)
-            sampling_start = sampling_end = update_end = None
-            if use_device_events:
-                sampling_start = torch.mps.Event(enable_timing=True)
-                sampling_end = torch.mps.Event(enable_timing=True)
-                update_end = torch.mps.Event(enable_timing=True)
-                sampling_start.record()
             negatives_tensor = _sample_negative_targets_mps(
                 active_pairs,
                 degree_tensor,
@@ -206,8 +197,6 @@ def optimize_embedding_mps(
                 negative_ratio if lambda_rep > 0.0 else 0,
                 int(batch_seed_rng.randint(0, np.iinfo(np.int32).max)),
             )
-            if sampling_end is not None:
-                sampling_end.record()
             left = active_pairs[:, 0]
             right = active_pairs[:, 1]
 
@@ -258,10 +247,6 @@ def optimize_embedding_mps(
                 updates.index_add_(0, negative_targets, -negative_updates)
 
             coordinates.add_(updates)
-            if update_end is not None:
-                update_end.record()
-                sampling_events.append((sampling_start, sampling_end))
-                update_events.append((sampling_end, update_end))
 
         coordinates.sub_(coordinates.mean(dim=0, keepdim=True))
         if progress_callback is not None:
@@ -270,23 +255,6 @@ def optimize_embedding_mps(
     torch.mps.synchronize()
     embedding[...] = coordinates.cpu().numpy()
     if timing_callback is not None:
-        if use_device_events:
-            try:
-                sampling_seconds = (
-                    sum(start.elapsed_time(end) for start, end in sampling_events)
-                    / 1000.0
-                )
-                update_seconds = (
-                    sum(start.elapsed_time(end) for start, end in update_events)
-                    / 1000.0
-                )
-            except RuntimeError:
-                # Some PyTorch MPS builds can return out-of-order timestamps
-                # for recorded events. Timing is diagnostic only, so preserve
-                # the completed fit and fall back to the synchronized wall time.
-                sampling_seconds = 0.0
-                update_seconds = perf_counter() - optimizer_started
-        else:
-            sampling_seconds = 0.0
-            update_seconds = perf_counter() - optimizer_started
-        timing_callback(sampling_seconds, update_seconds)
+        # Per-batch MPS events can exhaust the Metal event pool on long fits.
+        # Report synchronized wall time as one combined optimizer duration.
+        timing_callback(0.0, perf_counter() - optimizer_started)

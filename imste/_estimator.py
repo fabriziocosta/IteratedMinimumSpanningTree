@@ -574,6 +574,7 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
         coordinates when present.
         """
         embedding_started = time.perf_counter()
+        self.multilevel_initialization_time_ = 0.0
         rng = np.random.RandomState(self.random_state)
         seed = int(rng.randint(0, np.iinfo(np.int32).max))
         pca_features = (
@@ -590,6 +591,7 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
                 )
             coordinates = coordinates.astype(np.float32, copy=True)
         elif options["multilevel_init"]:
+            multilevel_started = time.perf_counter()
             coordinates = self._multilevel_initialization(
                 n_samples,
                 n_components,
@@ -598,6 +600,9 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
                 resolved_device,
                 pca_features,
                 options,
+            )
+            self.multilevel_initialization_time_ = (
+                time.perf_counter() - multilevel_started
             )
             if coordinates is None:
                 coordinates = self._default_initialization(
@@ -651,7 +656,11 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
                 max(options["n_epochs"], 1),
                 "Final embedding optimization",
             )
+        final_optimization_started = time.perf_counter()
         optimizer(coordinates, edges, tree_ranks, **optimizer_kwargs)
+        self.final_embedding_optimization_time_ = (
+            time.perf_counter() - final_optimization_started
+        )
         if self._active_mst_progress_callback is not None:
             self._active_mst_progress_callback(
                 options["n_epochs"],
@@ -839,8 +848,11 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
         precedence over either setting.
 
         Successful fits expose stage timings in seconds: `graph_construction_time_`,
+        `multilevel_initialization_time_`, `final_embedding_optimization_time_`,
         `embedding_optimization_time_`, `optimizer_negative_sampling_time_`,
-        `optimizer_coordinate_update_time_`, and total `fit_time_`.
+        `optimizer_coordinate_update_time_`, and total `fit_time_`. MPS reports
+        negative sampling and coordinate updates as one combined duration to
+        avoid per-batch Metal event recording on long fits.
         """
         fit_started = time.perf_counter()
         del y  # Unsupervised: labels are intentionally never used.
