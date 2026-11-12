@@ -317,8 +317,10 @@ coordinates take precedence over `pca_init` and are used at their supplied scale
 
 Set `multilevel_init=True` to initialize from the fitted ranked graph instead.
 The initializer scores graph edges by inverse rank, coarsens each connected
-component independently, lays out the smallest graph from seeded random
-coordinates, then expands and refines the graph level by level. Coarse-level
+component independently, then lays out the smallest graph from PCA of pooled
+group features when `pca_init=True` (the default). With `pca_init=False`, it
+uses seeded random coordinates instead. The layout then expands and refines
+the graph level by level. Coarse-level
 quotient edges use summed inverse-rank weights and run on the estimator's
 selected CPU or MPS optimizer. The final fit still uses the original graph and
 its normal rank scheduling. Explicit `init_coordinates` skip this process; if

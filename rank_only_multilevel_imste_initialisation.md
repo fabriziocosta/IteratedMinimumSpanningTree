@@ -6,6 +6,8 @@ Multilevel initialization builds a starting layout by working from a small graph
 
 The feature is optional. With the default `multilevel_init=False`, initialization continues to use the existing PCA or seeded random path. If you provide `init_coordinates`, those coordinates always take precedence and multilevel initialization is skipped.
 
+When multilevel initialization is enabled, `pca_init=True` (the default) initializes the coarsest graph by running PCA on the mean feature vector for each coarsest group. This use of features affects starting coordinates only: graph coarsening still depends on edge ranks, not feature distances. Set `pca_init=False` to use a seeded random start on the coarsest graph.
+
 The process has two phases:
 
 1. Build smaller graphs by grouping nearby vertices and combining the weights of edges between groups.
@@ -20,7 +22,7 @@ flowchart TD
     D -- Yes --> F[Coarsen the ranked graph]
     F --> G{Any level reduced the graph?}
     G -- No --> E
-    G -- Yes --> H[Layout the smallest graph]
+    G -- Yes --> H[Initialize the smallest graph with pooled-feature PCA by default]
     H --> I[Expand and refine through finer levels]
     I --> J[Run the normal final IMSTE fit]
     C --> J
@@ -122,7 +124,7 @@ If no level reduced the original graph, the estimator uses its regular PCA or ra
 flowchart LR
     L0[Original graph] -->|coarsen| L1[Smaller graph]
     L1 -->|coarsen| L2[Smallest graph reached]
-    L2 -->|stop at base size or no progress| Layout[Seeded random coordinates]
+    L2 -->|stop at base size or no progress| Layout[Pooled-feature PCA by default; seeded random if disabled]
     Layout --> R2[Refine smallest graph]
     R2 -->|expand| R1[Refine next graph]
     R1 -->|expand| R0[Use full graph coordinates]
@@ -130,7 +132,9 @@ flowchart LR
 
 ## Step 7: Lay out the smallest graph
 
-The smallest graph starts from seeded random coordinates. Its weighted quotient edges are optimized for `multilevel_epochs`. At each coarse level, the CPU or MPS optimizer selected by the estimator uses the direct quotient edge weights, normalized by their total weight.
+By default, the smallest graph starts from PCA of its pooled group features. To build these features, the estimator averages the original feature rows in each coarsest group, then applies the same feature-standardization and PCA initialization used by the regular estimator. If there are no features available, or `pca_init=False`, it starts from seeded random coordinates instead. Feature values affect only this initial layout; they do not affect which vertices were grouped or how quotient edges were weighted.
+
+The smallest graph's weighted quotient edges are optimized for `multilevel_epochs`. At each coarse level, the CPU or MPS optimizer selected by the estimator uses the direct quotient edge weights, normalized by their total weight.
 
 If the smallest graph has no edges, there is nothing to optimize at that level; the coordinate expansion steps still proceed.
 

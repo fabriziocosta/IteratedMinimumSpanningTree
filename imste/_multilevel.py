@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import numpy as np
-from scipy.sparse import csr_matrix
+from scipy.sparse import csr_matrix, issparse
 from scipy.sparse.csgraph import connected_components
 
 
@@ -166,6 +166,22 @@ def build_multilevel_hierarchy(
             next_weights,
         )
     return levels
+
+
+def aggregate_features_by_group(features, labels: np.ndarray):
+    """Return the per-group mean feature vector without densifying sparse input."""
+    labels = np.asarray(labels, dtype=np.int64)
+    n_groups = int(labels.max()) + 1 if labels.size else 0
+    counts = np.bincount(labels, minlength=n_groups).astype(np.float64)
+    membership = csr_matrix(
+        (np.ones(labels.size, dtype=np.float64), (labels, np.arange(labels.size))),
+        shape=(n_groups, labels.size),
+    )
+    if issparse(features):
+        grouped = membership @ csr_matrix(features)
+        return grouped.multiply(1.0 / counts[:, None]).tocsr()
+    grouped = np.asarray(membership @ np.asarray(features))
+    return grouped / counts[:, None]
 
 
 def expand_coordinates(

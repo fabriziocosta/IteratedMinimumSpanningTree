@@ -16,6 +16,7 @@ from sklearn.utils.validation import check_array, check_is_fitted
 from ._optimizer import optimize_embedding
 from ._multilevel import (
     _canonical_edges,
+    aggregate_features_by_group,
     build_multilevel_hierarchy,
     expand_coordinates,
 )
@@ -275,6 +276,9 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
         Initialize from a rank-only multilevel coarsening of the fitted graph.
         Explicit ``init_coordinates`` take precedence. If coarsening makes no
         progress, the configured PCA or seeded random initialization is used.
+        When ``pca_init=True`` and features are available, initialize the
+        coarsest graph from PCA of its pooled group features; otherwise use a
+        seeded random start at the coarsest level.
     multilevel_reduction_ratio : int, default=4
         Approximate reduction factor for each coarsening level.
     multilevel_base_size : int, default=1024
@@ -523,6 +527,7 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
                 edges,
                 tree_ranks,
                 resolved_device,
+                pca_features,
                 options,
             )
             if coordinates is None:
@@ -617,7 +622,14 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
         )
 
     def _multilevel_initialization(
-        self, n_samples, n_components, edges, ranks, resolved_device, options
+        self,
+        n_samples,
+        n_components,
+        edges,
+        ranks,
+        resolved_device,
+        pca_features,
+        options,
     ):
         levels = build_multilevel_hierarchy(
             n_samples,
@@ -645,10 +657,27 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
                 quotient_edges = np.empty((0, 2), dtype=np.int64)
                 quotient_weights = np.empty(0, dtype=np.float64)
 
-        seed_rng = np.random.RandomState(self.random_state)
-        coordinates = (seed_rng.standard_normal((n_nodes, n_components)) * 1e-3).astype(
-            np.float32
-        )
+        if pca_features is not None and options["pca_init"]:
+            if n_nodes < 2:
+                coordinates = np.zeros((n_nodes, n_components), dtype=np.float32)
+            else:
+                coarse_labels = np.arange(n_samples, dtype=np.int64)
+                for labels, _, _ in levels:
+                    coarse_labels = labels[coarse_labels]
+                coarse_features = aggregate_features_by_group(
+                    pca_features, coarse_labels
+                )
+                coordinates = _standardized_pca_initialization(
+                    coarse_features, n_components, self.random_state
+                )
+                coordinates = _scale_initialization_coordinates(
+                    coordinates, options["pca_init_scaling"]
+                ).astype(np.float32)
+        else:
+            seed_rng = np.random.RandomState(self.random_state)
+            coordinates = (
+                seed_rng.standard_normal((n_nodes, n_components)) * 1e-3
+            ).astype(np.float32)
         optimizer = optimize_embedding
         if resolved_device == "mps":
             from ._optimizer_mps import optimize_embedding_mps
