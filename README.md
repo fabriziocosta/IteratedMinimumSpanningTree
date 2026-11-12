@@ -212,6 +212,11 @@ and fitted ellipses, plus an interactive label-guided force viewer, live in
 `imste.visualization`. Install the notebook extras first
 (`python -m pip install "imste[notebook]"`), then pass
 an embedding and either a one-dimensional label vector or a metadata DataFrame.
+For dense embeddings, `render_datashader_embedding` rasterizes the point cloud
+instead of drawing every point individually. It returns a Datashader image,
+supports categorical labels and custom colors, and accepts coordinate ranges
+for zoomed views. Set `spread_px` to enlarge all marks by a fixed pixel radius,
+or use `max_spread_px` for density-aware spreading of sparse regions.
 
 ```python
 from imste.visualization import (
@@ -219,6 +224,7 @@ from imste.visualization import (
     plot_density_parent_tree,
     plot_ellipses,
     plot_knn_union,
+    render_datashader_embedding,
 )
 from IPython.display import display
 
@@ -234,6 +240,8 @@ viewer = interactive_force(
     mapper, labels, initial_k=10, initial_iterations=20,
 )
 display(viewer)
+image = render_datashader_embedding(mapper, labels, width=1200, height=900)
+display(image)
 ```
 
 For a DataFrame, select its label column with `label_key="cell_type"`. Each
@@ -342,12 +350,13 @@ examples to controlled and biological IMSTE–UMAP comparisons:
    times.
 2. [01 — Synthetic IMSTE and UMAP comparison](notebooks/01_imste_umap_synthetic_comparison.ipynb):
    compare global layout and local-neighbor behavior on controlled geometries.
-3. [02 — Biological IMSTE and UMAP comparison](notebooks/02_biological_imste_umap_comparison.ipynb):
-   evaluate annotated single-cell and diagnostic datasets with parameter and
-   seed checks.
-4. [03 — GSE52529 human myoblast pseudotime](notebooks/03_gse52529_human_myoblast_pseudotime.ipynb):
-   compare embeddings colored by observed differentiation time and calculate
+3. [02 — Biological embeddings and trajectories](notebooks/02_biological_imste_umap_comparison.ipynb):
+   evaluate annotated Paul15 and PBMC3k single-cell datasets, then compare
+   GSE52529 myoblast embeddings by observed differentiation time and calculate
    diffusion pseudotime from the GEO FPKM matrix.
+4. [03 — arXiv large-dataset comparison](notebooks/03_arxiv_large_dataset_comparison.ipynb):
+   download the arXiv metadata from Kaggle, create a sampled text-embedding
+   dataset, and compare IMSTE with UMAP using Datashader for dense plots.
 
 Earlier exploratory and interactive notebooks are in
 [notebooks/archive](notebooks/archive/). This includes the [interactive 2D

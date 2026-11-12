@@ -17,3 +17,15 @@ venv/
 
 # macOS metadata
 .DS_Store
+
+# Downloaded datasets and large generated artifacts
+/data/arxiv/
+*.npy
+*.npz
+*.parquet
+*.jsonl
+*.zip
+*.h5
+*.h5ad
+*.pt
+*.pth

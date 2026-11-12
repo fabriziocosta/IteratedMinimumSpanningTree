@@ -1,7 +1,7 @@
 """Reusable 2D renderers for IMSTE embeddings.
 
-Matplotlib, pandas, SciPy, scikit-learn, and ipywidgets are optional visualization
-dependencies. Import this module only in visualization workflows.
+Matplotlib, pandas, SciPy, scikit-learn, Datashader, and ipywidgets are optional
+visualization dependencies. Import this module only in visualization workflows.
 """
 
 from __future__ import annotations
@@ -11,6 +11,7 @@ from html import escape as html_escape
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+from matplotlib.colors import to_hex
 from matplotlib.collections import LineCollection
 from matplotlib.lines import Line2D
 from matplotlib.patches import Ellipse, Patch, PathPatch
@@ -182,6 +183,144 @@ def plot_embedding(
         ax=ax,
         legend_position=legend_position,
     )
+
+
+def render_datashader_embedding(
+    embedding,
+    labels=None,
+    *,
+    label_key: str | None = None,
+    color_key: dict[str, str] | None = None,
+    width: int = 1000,
+    height: int = 1000,
+    x_range: tuple[float, float] | None = None,
+    y_range: tuple[float, float] | None = None,
+    how: str = "eq_hist",
+    min_alpha: int = 40,
+    background: str = "white",
+    max_spread_px: int = 0,
+    spread_px: int = 0,
+    spread_threshold: float = 0.5,
+    spread_shape: str = "circle",
+):
+    """Rasterize a 2D embedding with Datashader.
+
+    ``embedding`` may be an ``(n, 2)`` array or a fitted IMSTE estimator.
+    ``labels`` may be a one-dimensional vector, Series, or DataFrame column;
+    categorical labels are shaded separately using ``color_key``. If labels
+    are omitted, the function shades point density. The returned Datashader
+    image can be displayed directly in a notebook or converted with
+    ``image.to_pil()`` for Matplotlib.
+
+    Datashader is an optional dependency installed by ``imste[notebook]``.
+    ``x_range`` and ``y_range`` allow rendering a zoomed view without dropping
+    points from the source embedding. Set ``spread_px`` above zero to enlarge
+    every rendered mark by a fixed number of pixels on each side. Alternatively,
+    set ``max_spread_px`` above zero for density-aware spreading, which stops
+    once the requested local pixel density is reached. Only one spread mode may
+    be enabled at a time.
+    """
+    coordinates = _embedding_array(embedding)
+    if coordinates.ndim != 2 or coordinates.shape[1] != 2:
+        raise ValueError("embedding must be a two-dimensional coordinate array.")
+    if len(coordinates) < 1 or not np.isfinite(coordinates).all():
+        raise ValueError("embedding must contain finite coordinates.")
+    for name, value in (("width", width), ("height", height)):
+        if (
+            isinstance(value, (bool, np.bool_))
+            or not isinstance(value, (int, np.integer))
+            or value < 1
+        ):
+            raise ValueError(f"{name} must be a positive integer.")
+    if (
+        isinstance(min_alpha, (bool, np.bool_))
+        or not isinstance(min_alpha, (int, np.integer))
+        or not 0 <= min_alpha <= 255
+    ):
+        raise ValueError("min_alpha must be an integer between 0 and 255.")
+    if (
+        isinstance(max_spread_px, (bool, np.bool_))
+        or not isinstance(max_spread_px, (int, np.integer))
+        or max_spread_px < 0
+    ):
+        raise ValueError("max_spread_px must be a non-negative integer.")
+    if (
+        isinstance(spread_px, (bool, np.bool_))
+        or not isinstance(spread_px, (int, np.integer))
+        or spread_px < 0
+    ):
+        raise ValueError("spread_px must be a non-negative integer.")
+    if max_spread_px > 0 and spread_px > 0:
+        raise ValueError("Set either spread_px or max_spread_px, not both.")
+    if (
+        not np.isfinite(spread_threshold)
+        or not 0.0 <= spread_threshold <= 1.0
+    ):
+        raise ValueError("spread_threshold must be between 0 and 1.")
+    for name, value in (("x_range", x_range), ("y_range", y_range)):
+        if value is None:
+            continue
+        if (
+            len(value) != 2
+            or not np.isfinite(value).all()
+            or value[0] >= value[1]
+        ):
+            raise ValueError(f"{name} must contain two finite increasing values.")
+
+    try:
+        import datashader as ds
+        import datashader.transfer_functions as tf
+    except ImportError as error:
+        raise ImportError(
+            "Datashader is required for this renderer. Install it with "
+            "`pip install 'imste[notebook]'` or `pip install datashader`."
+        ) from error
+
+    frame = pd.DataFrame({"x": coordinates[:, 0], "y": coordinates[:, 1]})
+    canvas = ds.Canvas(
+        plot_width=int(width),
+        plot_height=int(height),
+        x_range=x_range,
+        y_range=y_range,
+    )
+    if labels is None:
+        aggregate = canvas.points(frame, "x", "y", ds.count())
+        image = tf.shade(aggregate, how=how, min_alpha=int(min_alpha))
+    else:
+        observations, label_key = _as_observations(labels, label_key)
+        if len(observations) != len(coordinates):
+            raise ValueError("labels rows must match the embedding rows.")
+        values = observations[label_key].astype("object")
+        values = values.where(pd.notna(values), "(missing)").astype(str)
+        frame[label_key] = pd.Categorical(values)
+        aggregate = canvas.points(frame, "x", "y", ds.count_cat(label_key))
+        categories = frame[label_key].cat.categories
+        palette_name = "tab10" if len(categories) <= 10 else "tab20"
+        palette = plt.get_cmap(palette_name, max(len(categories), 1))
+        normalized_color_key = {
+            str(category): to_hex(palette(index))
+            for index, category in enumerate(categories)
+        }
+        if color_key is not None:
+            normalized_color_key.update(
+                {str(key): color for key, color in color_key.items()}
+            )
+        image = tf.shade(
+            aggregate,
+            color_key=normalized_color_key,
+            how=how,
+            min_alpha=int(min_alpha),
+        )
+    if spread_px > 0:
+        image = tf.spread(image, px=int(spread_px), shape=spread_shape)
+    elif max_spread_px > 0:
+        image = tf.dynspread(
+            image,
+            threshold=spread_threshold,
+            max_px=int(max_spread_px),
+            shape=spread_shape,
+        )
+    return tf.set_background(image, background)
 
 
 def plot_density_parent_tree(
