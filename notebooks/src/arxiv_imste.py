@@ -15,96 +15,31 @@ def apply_local_mexican_hat_force(
     point_mass: object,
     *,
     attraction_strength: float = 0.5,
-    near_repulsion_strength: float = 1.5,
+    near_repulsion_strength: float = 2.5,
     attraction_range: float = 1.0,
-    repulsion_range: float = 0.2,
+    repulsion_range: float = 0.5,
     neighbors: int = 8,
     step_size: float = 0.05,
     iterations: int = 3,
     mass_power: float = 0.5,
     n_jobs: int = -1,
 ) -> np.ndarray:
-    """Apply a density-weighted Mexican-hat interaction to local point pairs.
+    """Backward-compatible wrapper for the modular IMSTE gravity force."""
+    from imste._gravity import apply_local_mexican_hat_force as apply_force
 
-    Each iteration finds nearby pairs in the current 2D layout. The broader
-    Gaussian attracts at middle distances; a narrower, stronger Gaussian
-    repels only near-collisions. Both interaction ranges scale with each
-    point's local ``neighbors``-radius, so the repulsive force stays local.
-    Feature-space density mass weights the pull from neighboring points.
-    """
-    from sklearn.neighbors import NearestNeighbors
-
-    coordinates = np.asarray(embedding, dtype=np.float64)
-    point_mass = np.asarray(point_mass, dtype=np.float64).reshape(-1)
-    if coordinates.ndim != 2 or coordinates.shape[1] != 2 or len(coordinates) < 3:
-        raise ValueError("embedding must have shape (n_samples >= 3, 2).")
-    if point_mass.shape != (len(coordinates),):
-        raise ValueError("point_mass must contain one value per embedded point.")
-    for name, value in {
-        "attraction_strength": attraction_strength,
-        "near_repulsion_strength": near_repulsion_strength,
-        "attraction_range": attraction_range,
-        "repulsion_range": repulsion_range,
-        "step_size": step_size,
-        "mass_power": mass_power,
-    }.items():
-        if not np.isfinite(value) or value < 0:
-            raise ValueError(f"{name} must be finite and nonnegative.")
-    if repulsion_range <= 0 or attraction_range <= repulsion_range:
-        raise ValueError("attraction_range must exceed positive repulsion_range.")
-    if isinstance(neighbors, bool) or int(neighbors) != neighbors or not 1 <= neighbors < len(coordinates):
-        raise ValueError("neighbors must be an integer in [1, n_samples).")
-    if isinstance(iterations, bool) or int(iterations) != iterations or iterations < 0:
-        raise ValueError("iterations must be a nonnegative integer.")
-    if not np.isfinite(point_mass).all() or np.any(point_mass <= 0):
-        raise ValueError("point_mass values must be finite and positive.")
-
-    relative_mass = np.clip(point_mass / np.median(point_mass), 0.1, 10.0) ** mass_power
-    for iteration in range(int(iterations)):
-        index = NearestNeighbors(
-            n_neighbors=int(neighbors) + 1, algorithm="kd_tree", n_jobs=n_jobs
-        ).fit(coordinates)
-        distances, indices = index.kneighbors(coordinates, return_distance=True)
-        # Remove the query row itself explicitly; duplicate coordinates can
-        # make it appear after another zero-distance neighbor.
-        keep = indices != np.arange(len(coordinates), dtype=np.int64)[:, None]
-        distances = distances[keep].reshape(len(coordinates), int(neighbors))
-        indices = indices[keep].reshape(len(coordinates), int(neighbors))
-        local_scale = np.maximum(distances[:, -1], np.finfo(np.float64).eps)
-        pair_scale = np.sqrt(local_scale[:, None] * local_scale[indices])
-        sigma_attract = np.maximum(attraction_range * pair_scale, 1e-12)
-        sigma_repel = np.maximum(repulsion_range * pair_scale, 1e-12)
-        attraction = attraction_strength * np.exp(-0.5 * (distances / sigma_attract) ** 2)
-        repulsion = near_repulsion_strength * np.exp(-0.5 * (distances / sigma_repel) ** 2)
-        interaction = attraction - repulsion
-        direction = (coordinates[indices] - coordinates[:, None, :]) / np.maximum(
-            distances[:, :, None], 1e-12
-        )
-        coincident = distances <= 1e-12
-        if np.any(coincident):
-            source_rows = np.broadcast_to(
-                np.arange(len(coordinates), dtype=np.int64)[:, None], indices.shape
-            )
-            lower = np.minimum(source_rows, indices)
-            upper = np.maximum(source_rows, indices)
-            pair_code = (lower * 73_856_093) ^ (upper * 19_349_663) ^ iteration
-            angle = (pair_code % 1_000_003) * (2.0 * np.pi / 1_000_003)
-            pair_direction = np.stack((np.cos(angle), np.sin(angle)), axis=2)
-            pair_direction *= np.where(source_rows < indices, 1.0, -1.0)[:, :, None]
-            direction[coincident] = pair_direction[coincident]
-        neighbor_mass = relative_mass[indices]
-        weighted_force = interaction[:, :, None] * direction * neighbor_mass[:, :, None]
-        force = weighted_force.sum(axis=1) / np.maximum(
-            (np.abs(interaction) * neighbor_mass).sum(axis=1, keepdims=True), 1e-12
-        )
-        movement = step_size * local_scale[:, None] * force
-        movement_norm = np.linalg.norm(movement, axis=1)
-        max_movement = step_size * local_scale
-        shrink = np.minimum(1.0, max_movement / np.maximum(movement_norm, 1e-12))
-        coordinates += movement * shrink[:, None]
-        coordinates -= coordinates.mean(axis=0)
-    return coordinates.astype(np.float32)
-
+    return apply_force(
+        embedding,
+        point_mass,
+        attraction_strength=attraction_strength,
+        near_repulsion_strength=near_repulsion_strength,
+        attraction_range=attraction_range,
+        repulsion_range=repulsion_range,
+        neighbors=neighbors,
+        step_size=step_size,
+        iterations=iterations,
+        mass_power=mass_power,
+        n_jobs=n_jobs,
+    )
 
 def _sampled_silhouette_score(
     coordinates: np.ndarray,
@@ -539,9 +474,11 @@ def save_arxiv_projection_cache(
     verbose: bool,
     umap_embedding: object,
     imste_embedding: object,
+    imste_intermediate_embedding: object | None = None,
     labels: object,
     umap_seconds: float,
     imste_seconds: float,
+    gravity_seconds: float = 0.0,
     dataset_id: str,
 ) -> Path:
     """Atomically save both layouts and the fit metadata to the projection cache."""
@@ -552,10 +489,23 @@ def save_arxiv_projection_cache(
         temp_path,
         projection_id=np.asarray(projection_id),
         umap=np.asarray(umap_embedding, dtype=np.float32),
-        imste_multilevel=np.asarray(imste_embedding, dtype=np.float32),
+        imste_multilevel=np.asarray(
+            imste_embedding
+            if imste_intermediate_embedding is None
+            else imste_intermediate_embedding,
+            dtype=np.float32,
+        ),
+        imste_intermediate=np.asarray(
+            imste_embedding
+            if imste_intermediate_embedding is None
+            else imste_intermediate_embedding,
+            dtype=np.float32,
+        ),
+        imste_gravity=np.asarray(imste_embedding, dtype=np.float32),
         labels=np.asarray(labels, dtype="U"),
         umap_seconds=np.asarray(umap_seconds),
         imste_seconds=np.asarray(imste_seconds),
+        gravity_seconds=np.asarray(gravity_seconds),
         dataset_id=np.asarray(dataset_id),
         settings_json=np.asarray(json.dumps(
             {
@@ -591,11 +541,32 @@ def prepare_arxiv_projection_cache(
         umap_settings["metric"],
         umap_settings["nearest_neighbor_backend"],
         umap_settings["random_state"],
+        umap_settings.get("init", "auto"),
+        umap_settings.get("compatibility_layout"),
     ]
     projection_settings = {
+        "cache_schema": 2,
         "data_id": dataset_id,
         "metric": metric,
         "umap": umap_key,
+        "gravity": {
+            key: imste_settings.get(key, default)
+            for key, default in {
+                "gravity_mode": "mexican_hat",
+                "gravity_neighbors": 15,
+                "gravity_resolution": 0.8,
+                "gravity_strength": 0.2,
+                "gravity_core_quantile": 0.95,
+                "gravity_mass_power": 0.5,
+                "gravity_attraction_strength": 0.5,
+                "gravity_near_repulsion_strength": 2.5,
+                "gravity_force_neighbors": 8,
+                "gravity_attraction_range": 1.0,
+                "gravity_repulsion_range": 0.5,
+                "gravity_step_size": 0.05,
+                "gravity_iterations": 3,
+            }.items()
+        },
         "imste": [
             imste_settings["n_msts"],
             imste_settings["n_epochs"],
@@ -682,9 +653,24 @@ def prepare_arxiv_projection_cache(
             if str(saved["projection_id"].item()) == projection_id:
                 cached = {
                     "umap": saved["umap"],
+                    "imste_intermediate": (
+                        saved["imste_intermediate"]
+                        if "imste_intermediate" in saved.files
+                        else saved["imste_multilevel"]
+                    ),
                     "imste_multilevel": saved["imste_multilevel"],
+                    "imste_gravity": (
+                        saved["imste_gravity"]
+                        if "imste_gravity" in saved.files
+                        else saved["imste_multilevel"]
+                    ),
                     "umap_seconds": float(saved["umap_seconds"]),
                     "imste_seconds": float(saved["imste_seconds"]),
+                    "gravity_seconds": (
+                        float(saved["gravity_seconds"])
+                        if "gravity_seconds" in saved.files
+                        else 0.0
+                    ),
                 }
 
     return {

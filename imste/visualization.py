@@ -331,12 +331,20 @@ def render_datashader_embedding(
             normalized_color_key.update(
                 {str(key): color for key, color in color_key.items()}
             )
-        image = tf.shade(
-            aggregate,
-            color_key=normalized_color_key,
-            how=how,
-            min_alpha=int(min_alpha),
-        )
+        # Datashader's categorical compositor multiplies a (height, width,
+        # categories) buffer by an RGB matrix. Shade one category at a time and
+        # composite the RGBA layers instead; this avoids unstable BLAS
+        # matrix-multiply warnings on some platforms and keeps category colors.
+        category_images = [
+            tf.shade(
+                aggregate.sel({label_key: category}),
+                cmap=normalized_color_key[str(category)],
+                how=how,
+                min_alpha=int(min_alpha),
+            )
+            for category in categories
+        ]
+        image = tf.stack(*category_images, how="over")
     if spread_px > 0:
         image = tf.spread(image, px=int(spread_px), shape=spread_shape)
     elif max_spread_px > 0:

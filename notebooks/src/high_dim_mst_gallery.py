@@ -198,6 +198,19 @@ def run_high_dim_mst_gallery(
     multilevel_reduction_ratio: int = 4,
     multilevel_base_size: int = 1024,
     multilevel_epochs: int = 10,
+    gravity_mode: str | None = "mexican_hat",
+    gravity_neighbors: int = 15,
+    gravity_resolution: float = 0.8,
+    gravity_strength: float = 0.2,
+    gravity_core_quantile: float = 0.95,
+    gravity_mass_power: float = 0.5,
+    gravity_attraction_strength: float = 0.5,
+    gravity_near_repulsion_strength: float = 2.5,
+    gravity_force_neighbors: int = 8,
+    gravity_attraction_range: float = 1.0,
+    gravity_repulsion_range: float = 0.5,
+    gravity_step_size: float = 0.05,
+    gravity_iterations: int = 3,
 ) -> dict[str, object]:
     """Fit and display 2D IMSTE embeddings for several image datasets.
 
@@ -212,6 +225,8 @@ def run_high_dim_mst_gallery(
     cosine graph distances; cosine uses exact Prim construction. Multilevel initialization is
     enabled by default for this gallery and can be configured with the
     ``multilevel_*`` options.
+    Gravity runs as a second phase of the estimator by default. Set
+    ``gravity_mode=None`` to return the base IMSTE layout only.
     """
     if max_samples < 10:
         raise ValueError("max_samples must be at least 10.")
@@ -229,6 +244,7 @@ def run_high_dim_mst_gallery(
     datasets, load_errors = _load_datasets(max_samples, random_state)
 
     embeddings = {}
+    base_embeddings = {}
     summaries = []
     for name, (X, labels) in datasets.items():
         if plot_sample_images:
@@ -275,6 +291,19 @@ def run_high_dim_mst_gallery(
                         multilevel_reduction_ratio=multilevel_reduction_ratio,
                         multilevel_base_size=multilevel_base_size,
                         multilevel_epochs=multilevel_epochs,
+                        gravity_mode=gravity_mode,
+                        gravity_neighbors=gravity_neighbors,
+                        gravity_resolution=gravity_resolution,
+                        gravity_strength=gravity_strength,
+                        gravity_core_quantile=gravity_core_quantile,
+                        gravity_mass_power=gravity_mass_power,
+                        gravity_attraction_strength=gravity_attraction_strength,
+                        gravity_near_repulsion_strength=gravity_near_repulsion_strength,
+                        gravity_force_neighbors=gravity_force_neighbors,
+                        gravity_attraction_range=gravity_attraction_range,
+                        gravity_repulsion_range=gravity_repulsion_range,
+                        gravity_step_size=gravity_step_size,
+                        gravity_iterations=gravity_iterations,
                     ),
                 ),
             ]
@@ -284,6 +313,7 @@ def run_high_dim_mst_gallery(
         elapsed = time.perf_counter() - started
         print(f"  pipeline completed in {elapsed:.2f} seconds", flush=True)
         estimator = pipeline.named_steps["imste"]
+        base_embeddings[name] = estimator.embedding_before_gravity_.copy()
         mst_summary = f"{n_msts} MSTs"
         feature_count = X.shape[1]
         print(
@@ -322,6 +352,10 @@ def run_high_dim_mst_gallery(
                 "multilevel_reduction_ratio": multilevel_reduction_ratio,
                 "multilevel_base_size": multilevel_base_size,
                 "multilevel_epochs": multilevel_epochs,
+                "gravity_mode": gravity_mode,
+                "gravity_region_count": estimator.gravity_region_count_,
+                "gravity_seconds": estimator.gravity_time_,
+                "imste_seconds": estimator.imste_fit_time_,
                 "unique_graph_edges": len(estimator.graph_edges_),
                 "seconds": elapsed,
                 "device": estimator.device_,
@@ -359,6 +393,7 @@ def run_high_dim_mst_gallery(
 
     return {
         "embeddings": embeddings,
+        "base_embeddings": base_embeddings,
         "datasets": datasets,
         "summary": pd.DataFrame(summaries),
         "load_errors": load_errors,

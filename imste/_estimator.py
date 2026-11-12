@@ -21,7 +21,10 @@ from ._multilevel import (
     expand_coordinates,
 )
 from .mst import build_mst_edges, iterated_graph_edges
-from .mst.prim import iterated_prim_distance_edges as _iterated_mst_edges
+from .mst.prim import (
+    _cosine_safe_normalize,
+    iterated_prim_distance_edges as _iterated_mst_edges,
+)
 
 
 def _positive_integer(name: str, value: object, *, allow_zero: bool = False) -> int:
@@ -358,6 +361,34 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
         rank-one attractive edges alongside the ranked spanning trees. This
         makes local neighborhoods denser and is available for Euclidean FAMST
         fits.
+    gravity_mode : {'density_core', 'mexican_hat', None}, default='mexican_hat'
+        Apply a density-aware second-phase layout after the IMSTE optimization.
+        ``None`` disables gravity. Gravity currently requires dense Euclidean
+        features and at least two embedding dimensions; it refines the first two.
+    gravity_neighbors : int, default=15
+        Feature-space neighbors used to build gravity regions.
+    gravity_resolution : float, default=0.8
+        Leiden resolution used to identify gravity regions.
+    gravity_strength : float, default=0.2
+        Base attraction from each point toward its region's density core.
+    gravity_core_quantile : float, default=0.95
+        Within-region density quantile defining the core points.
+    gravity_mass_power : float, default=0.5
+        Exponent controlling how region and point density affect gravity.
+    gravity_attraction_strength : float, default=0.5
+        Attraction strength of the local Mexican-hat force.
+    gravity_near_repulsion_strength : float, default=2.5
+        Repulsion strength between close embedded neighbors.
+    gravity_force_neighbors : int, default=8
+        Number of embedded neighbors used by the local force.
+    gravity_attraction_range : float, default=1.0
+        Attraction radius relative to local embedded neighbor distance.
+    gravity_repulsion_range : float, default=0.5
+        Repulsion radius relative to local embedded neighbor distance.
+    gravity_step_size : float, default=0.05
+        Maximum local force step as a fraction of each point's local scale.
+    gravity_iterations : int, default=3
+        Number of local-force refinement iterations.
     mst_inter_component_edges : int, default=5
         FAMST candidate edges retained between each component pair selected by
         the representative MST.
@@ -412,6 +443,19 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
         metric: str = "euclidean",
         mst_neighbor_backend: str = "auto",
         include_knn_attraction: bool = False,
+        gravity_mode: str | None = "mexican_hat",
+        gravity_neighbors: int = 15,
+        gravity_resolution: float = 0.8,
+        gravity_strength: float = 0.2,
+        gravity_core_quantile: float = 0.95,
+        gravity_mass_power: float = 0.5,
+        gravity_attraction_strength: float = 0.5,
+        gravity_near_repulsion_strength: float = 2.5,
+        gravity_force_neighbors: int = 8,
+        gravity_attraction_range: float = 1.0,
+        gravity_repulsion_range: float = 0.5,
+        gravity_step_size: float = 0.05,
+        gravity_iterations: int = 3,
     ) -> None:
         self.n_msts = n_msts
         self.n_components = n_components
@@ -446,6 +490,19 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
         self.metric = metric
         self.mst_neighbor_backend = mst_neighbor_backend
         self.include_knn_attraction = include_knn_attraction
+        self.gravity_mode = gravity_mode
+        self.gravity_neighbors = gravity_neighbors
+        self.gravity_resolution = gravity_resolution
+        self.gravity_strength = gravity_strength
+        self.gravity_core_quantile = gravity_core_quantile
+        self.gravity_mass_power = gravity_mass_power
+        self.gravity_attraction_strength = gravity_attraction_strength
+        self.gravity_near_repulsion_strength = gravity_near_repulsion_strength
+        self.gravity_force_neighbors = gravity_force_neighbors
+        self.gravity_attraction_range = gravity_attraction_range
+        self.gravity_repulsion_range = gravity_repulsion_range
+        self.gravity_step_size = gravity_step_size
+        self.gravity_iterations = gravity_iterations
 
     def _validated_fit_options(self) -> dict[str, object]:
         if not isinstance(self.verbose, (bool, np.bool_)):
@@ -506,6 +563,58 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
             raise ValueError("include_knn_attraction requires mst_method='famst'.")
         if self.include_knn_attraction and self.metric != "euclidean":
             raise ValueError("include_knn_attraction requires metric='euclidean'.")
+        if self.gravity_mode not in {None, "density_core", "mexican_hat"}:
+            raise ValueError(
+                "gravity_mode must be 'density_core', 'mexican_hat', or None."
+            )
+        if self.gravity_mode is not None and self.metric != "euclidean":
+            raise ValueError("gravity refinement currently requires metric='euclidean'.")
+        if self.gravity_mode is not None and n_components < 2:
+            raise ValueError("gravity refinement requires n_components >= 2.")
+        gravity_neighbors = _positive_integer(
+            "gravity_neighbors", self.gravity_neighbors
+        )
+        gravity_force_neighbors = _positive_integer(
+            "gravity_force_neighbors", self.gravity_force_neighbors
+        )
+        gravity_iterations = _positive_integer(
+            "gravity_iterations", self.gravity_iterations, allow_zero=True
+        )
+        gravity_resolution = _finite_nonnegative(
+            "gravity_resolution", self.gravity_resolution, strictly_positive=True
+        )
+        gravity_strength = _finite_nonnegative(
+            "gravity_strength", self.gravity_strength
+        )
+        gravity_core_quantile = _finite_nonnegative(
+            "gravity_core_quantile", self.gravity_core_quantile
+        )
+        if gravity_core_quantile > 1.0:
+            raise ValueError("gravity_core_quantile must be in [0, 1].")
+        gravity_mass_power = _finite_nonnegative(
+            "gravity_mass_power", self.gravity_mass_power
+        )
+        gravity_attraction_strength = _finite_nonnegative(
+            "gravity_attraction_strength", self.gravity_attraction_strength
+        )
+        gravity_near_repulsion_strength = _finite_nonnegative(
+            "gravity_near_repulsion_strength", self.gravity_near_repulsion_strength
+        )
+        gravity_attraction_range = _finite_nonnegative(
+            "gravity_attraction_range", self.gravity_attraction_range,
+            strictly_positive=True,
+        )
+        gravity_repulsion_range = _finite_nonnegative(
+            "gravity_repulsion_range", self.gravity_repulsion_range,
+            strictly_positive=True,
+        )
+        if gravity_attraction_range <= gravity_repulsion_range:
+            raise ValueError(
+                "gravity_attraction_range must exceed gravity_repulsion_range."
+            )
+        gravity_step_size = _finite_nonnegative(
+            "gravity_step_size", self.gravity_step_size
+        )
         learning_rate = _finite_nonnegative(
             "learning_rate", self.learning_rate, strictly_positive=True
         )
@@ -563,6 +672,19 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
             "pca_init_scaling": self.pca_init_scaling,
             "resolved_device": resolved_device,
             "metric": self.metric,
+            "gravity_mode": self.gravity_mode,
+            "gravity_neighbors": gravity_neighbors,
+            "gravity_resolution": gravity_resolution,
+            "gravity_strength": gravity_strength,
+            "gravity_core_quantile": gravity_core_quantile,
+            "gravity_mass_power": gravity_mass_power,
+            "gravity_attraction_strength": gravity_attraction_strength,
+            "gravity_near_repulsion_strength": gravity_near_repulsion_strength,
+            "gravity_force_neighbors": gravity_force_neighbors,
+            "gravity_attraction_range": gravity_attraction_range,
+            "gravity_repulsion_range": gravity_repulsion_range,
+            "gravity_step_size": gravity_step_size,
+            "gravity_iterations": gravity_iterations,
         }
 
     def _activate_progress_reporting(self) -> None:
@@ -748,8 +870,6 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
             self.n_samples_fit_ = n_samples
             self.graph_input_ = True
         self.fit_time_ = time.perf_counter() - fit_started
-        if self._progress_reporter is not None:
-            self._progress_reporter.finish()
         return self
 
     def _default_initialization(
@@ -919,6 +1039,14 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
         )
         if issparse(X_checked):
             X_checked = csr_matrix(X_checked)
+        # Cosine distance depends only on row direction. Normalize with a
+        # scale-first algorithm so very large finite inputs cannot overflow
+        # scikit-learn's dot products during distance calculation or PCA init.
+        metric_features = (
+            _cosine_safe_normalize(X_checked)
+            if options["metric"] == "cosine"
+            else X_checked
+        )
         n_samples = X_checked.shape[0]
         if n_samples < 2:
             raise ValueError("X must contain at least two samples to construct an MST.")
@@ -938,7 +1066,7 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
             else None
         )
         edges, tree_ranks = build_mst_edges(
-            X_checked,
+            metric_features,
             n_msts=options["n_msts"],
             random_state=self.random_state,
             method=self.mst_method,
@@ -971,7 +1099,7 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
             self._progress_reporter.phase_finished(
                 "MST graph construction", self.graph_construction_time_
             )
-        return self._fit_edges(
+        self._fit_edges(
             n_samples=n_samples,
             n_components=options["n_components"],
             edges=edges,
@@ -981,7 +1109,7 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
             schedule_by_rank=self.mst_method != "prim",
             X_checked=X_checked,
             X_original=X,
-            initialization_features=X_checked,
+            initialization_features=metric_features,
             initial_coordinates=self.init_coordinates,
             **{
                 name: value
@@ -989,9 +1117,96 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
                 if name not in {
                     "n_components", "n_msts", "resolved_device",
                     "mst_neighbor_backend", "include_knn_attraction",
+                    "gravity_mode", "gravity_neighbors", "gravity_resolution",
+                    "gravity_strength", "gravity_core_quantile",
+                    "gravity_mass_power", "gravity_attraction_strength",
+                    "gravity_near_repulsion_strength", "gravity_force_neighbors",
+                    "gravity_attraction_range", "gravity_repulsion_range",
+                    "gravity_step_size", "gravity_iterations",
                 }
             },
         )
+        self.embedding_before_gravity_ = self.embedding_.copy()
+        self.imste_fit_time_ = self.fit_time_
+        if options["gravity_mode"] is not None:
+            if issparse(X_checked):
+                raise ValueError("gravity refinement currently requires dense features.")
+            if n_samples < 3:
+                self.gravity_region_count_ = 0
+                self.gravity_graph_construction_time_ = 0.0
+                self.gravity_force_time_ = 0.0
+                self.gravity_time_ = 0.0
+                self.fit_time_ = time.perf_counter() - fit_started
+                if self._progress_reporter is not None:
+                    self._progress_reporter.finish()
+                return self
+            from ._gravity import density_gravity_layout
+
+            gravity_started = time.perf_counter()
+            gravity_embedding, gravity_diagnostics = density_gravity_layout(
+                X_checked,
+                self.embedding_before_gravity_[:, :2],
+                mode=options["gravity_mode"],
+                neighbors=min(options["gravity_neighbors"], n_samples - 1),
+                resolution=options["gravity_resolution"],
+                random_state=42 if self.random_state is None else self.random_state,
+                core_quantile=options["gravity_core_quantile"],
+                strength=options["gravity_strength"],
+                mass_power=options["gravity_mass_power"],
+                attraction_strength=options["gravity_attraction_strength"],
+                near_repulsion_strength=options[
+                    "gravity_near_repulsion_strength"
+                ],
+                force_neighbors=min(options["gravity_force_neighbors"], n_samples - 1),
+                attraction_range=options["gravity_attraction_range"],
+                repulsion_range=options["gravity_repulsion_range"],
+                step_size=options["gravity_step_size"],
+                iterations=options["gravity_iterations"],
+            )
+            self.embedding_ = self.embedding_before_gravity_.copy()
+            self.embedding_[:, :2] = gravity_embedding
+            self.gravity_membership_ = gravity_diagnostics["membership"]
+            self.gravity_point_mass_ = gravity_diagnostics["point_mass"]
+            self.gravity_region_count_ = int(gravity_diagnostics["region_count"])
+            self.gravity_graph_construction_time_ = float(
+                gravity_diagnostics["graph_seconds"]
+            )
+            self.gravity_force_time_ = float(gravity_diagnostics["force_seconds"])
+            self.gravity_time_ = time.perf_counter() - gravity_started
+        else:
+            self.gravity_region_count_ = 0
+            self.gravity_graph_construction_time_ = 0.0
+            self.gravity_force_time_ = 0.0
+            self.gravity_time_ = 0.0
+            for name in ("gravity_membership_", "gravity_point_mass_"):
+                if hasattr(self, name):
+                    delattr(self, name)
+            if hasattr(self, "gravity_skipped_reason_"):
+                del self.gravity_skipped_reason_
+        self.fit_time_ = time.perf_counter() - fit_started
+        if self._progress_reporter is not None:
+            self._progress_reporter.finish()
+        return self
+
+    def fit_transform(
+        self,
+        X: object,
+        y: object = None,
+        *,
+        return_intermediate: bool = False,
+    ) -> np.ndarray | tuple[np.ndarray, np.ndarray]:
+        """Fit and return final coordinates, optionally with pre-gravity ones.
+
+        When ``return_intermediate=True``, return a pair containing the
+        optimized IMSTE coordinates before gravity and the final coordinates
+        after gravity. With ``gravity_mode=None``, both arrays are identical.
+        """
+        if not isinstance(return_intermediate, (bool, np.bool_)):
+            raise ValueError("return_intermediate must be a boolean.")
+        self.fit(X, y=y)
+        if return_intermediate:
+            return self.embedding_before_gravity_.copy(), self.embedding_.copy()
+        return self.embedding_.copy()
 
     def fit_graph(
         self,
@@ -1047,6 +1262,9 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
                 raise ValueError(
                     "init_features must have one row per distance_graph node."
                 )
+        if options["gravity_mode"] is not None and initialization_features is not None:
+            if issparse(initialization_features):
+                raise ValueError("gravity refinement currently requires dense features.")
 
         self._activate_progress_reporting()
         graph_started = time.perf_counter()
@@ -1062,7 +1280,7 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
                 "MST graph construction", self.graph_construction_time_
             )
         tree_ranks = np.asarray(tree_ranks, dtype=np.int32)
-        return self._fit_edges(
+        self._fit_edges(
             n_samples=distance_graph.shape[0],
             n_components=options["n_components"],
             edges=edges,
@@ -1081,6 +1299,69 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
                 }
             },
         )
+        self.embedding_before_gravity_ = self.embedding_.copy()
+        self.imste_fit_time_ = self.fit_time_
+        if options["gravity_mode"] is not None and initialization_features is not None:
+            n_samples = distance_graph.shape[0]
+            if n_samples >= 3:
+                from ._gravity import density_gravity_layout
+
+                gravity_started = time.perf_counter()
+                gravity_embedding, diagnostics = density_gravity_layout(
+                    initialization_features,
+                    self.embedding_before_gravity_[:, :2],
+                    mode=options["gravity_mode"],
+                    neighbors=min(options["gravity_neighbors"], n_samples - 1),
+                    resolution=options["gravity_resolution"],
+                    random_state=42 if self.random_state is None else self.random_state,
+                    core_quantile=options["gravity_core_quantile"],
+                    strength=options["gravity_strength"],
+                    mass_power=options["gravity_mass_power"],
+                    attraction_strength=options["gravity_attraction_strength"],
+                    near_repulsion_strength=options[
+                        "gravity_near_repulsion_strength"
+                    ],
+                    force_neighbors=min(options["gravity_force_neighbors"], n_samples - 1),
+                    attraction_range=options["gravity_attraction_range"],
+                    repulsion_range=options["gravity_repulsion_range"],
+                    step_size=options["gravity_step_size"],
+                    iterations=options["gravity_iterations"],
+                )
+                self.embedding_ = self.embedding_before_gravity_.copy()
+                self.embedding_[:, :2] = gravity_embedding
+                self.gravity_membership_ = diagnostics["membership"]
+                self.gravity_point_mass_ = diagnostics["point_mass"]
+                self.gravity_region_count_ = int(diagnostics["region_count"])
+                self.gravity_graph_construction_time_ = float(
+                    diagnostics["graph_seconds"]
+                )
+                self.gravity_force_time_ = float(diagnostics["force_seconds"])
+                self.gravity_time_ = time.perf_counter() - gravity_started
+                if hasattr(self, "gravity_skipped_reason_"):
+                    del self.gravity_skipped_reason_
+            else:
+                self.gravity_region_count_ = 0
+                self.gravity_graph_construction_time_ = 0.0
+                self.gravity_force_time_ = 0.0
+                self.gravity_time_ = 0.0
+        else:
+            self.gravity_region_count_ = 0
+            self.gravity_graph_construction_time_ = 0.0
+            self.gravity_force_time_ = 0.0
+            self.gravity_time_ = 0.0
+            if options["gravity_mode"] is not None:
+                self.gravity_skipped_reason_ = (
+                    "fit_graph() needs init_features to build the gravity graph."
+                )
+            elif hasattr(self, "gravity_skipped_reason_"):
+                del self.gravity_skipped_reason_
+            for name in ("gravity_membership_", "gravity_point_mass_"):
+                if hasattr(self, name):
+                    delattr(self, name)
+        self.fit_time_ = time.perf_counter() - fit_started
+        if self._progress_reporter is not None:
+            self._progress_reporter.finish()
+        return self
 
     def transform(self, X: object) -> np.ndarray:
         """Return fitted coordinates for the exact training rows only."""

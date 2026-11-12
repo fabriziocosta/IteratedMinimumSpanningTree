@@ -1,0 +1,239 @@
+"""Density-aware second-phase layout refinements for IMSTE embeddings."""
+
+from __future__ import annotations
+
+import time
+
+import numpy as np
+
+
+def apply_local_mexican_hat_force(
+    embedding: object,
+    point_mass: object,
+    *,
+    attraction_strength: float = 0.5,
+    near_repulsion_strength: float = 2.5,
+    attraction_range: float = 1.0,
+    repulsion_range: float = 0.5,
+    neighbors: int = 8,
+    step_size: float = 0.05,
+    iterations: int = 3,
+    mass_power: float = 0.5,
+    n_jobs: int = -1,
+) -> np.ndarray:
+    """Apply locally scaled Mexican-hat forces to 2D coordinates."""
+    from sklearn.neighbors import NearestNeighbors
+
+    coordinates = np.asarray(embedding, dtype=np.float64).copy()
+    point_mass = np.asarray(point_mass, dtype=np.float64).reshape(-1)
+    if coordinates.ndim != 2 or coordinates.shape[1] != 2 or len(coordinates) < 3:
+        raise ValueError("embedding must have shape (n_samples >= 3, 2).")
+    if point_mass.shape != (len(coordinates),):
+        raise ValueError("point_mass must contain one value per embedded point.")
+    if not np.isfinite(coordinates).all():
+        raise ValueError("embedding must contain only finite coordinates.")
+    if not np.isfinite(point_mass).all() or np.any(point_mass <= 0):
+        raise ValueError("point_mass values must be finite and positive.")
+    if not 1 <= int(neighbors) < len(coordinates):
+        raise ValueError("neighbors must be in [1, n_samples).")
+    if int(iterations) < 0:
+        raise ValueError("iterations must be nonnegative.")
+    if repulsion_range <= 0 or attraction_range <= repulsion_range:
+        raise ValueError("attraction_range must exceed positive repulsion_range.")
+
+    relative_mass = np.clip(point_mass / np.median(point_mass), 0.1, 10.0) ** mass_power
+    for iteration in range(int(iterations)):
+        index = NearestNeighbors(
+            n_neighbors=int(neighbors) + 1,
+            algorithm="kd_tree",
+            n_jobs=n_jobs,
+        ).fit(coordinates)
+        distances, indices = index.kneighbors(coordinates, return_distance=True)
+        keep = indices != np.arange(len(coordinates), dtype=np.int64)[:, None]
+        distances = distances[keep].reshape(len(coordinates), int(neighbors))
+        indices = indices[keep].reshape(len(coordinates), int(neighbors))
+        local_scale = np.maximum(distances[:, -1], np.finfo(np.float64).eps)
+        pair_scale = np.sqrt(local_scale[:, None] * local_scale[indices])
+        sigma_attract = np.maximum(attraction_range * pair_scale, 1e-12)
+        sigma_repel = np.maximum(repulsion_range * pair_scale, 1e-12)
+        attraction = attraction_strength * np.exp(-0.5 * (distances / sigma_attract) ** 2)
+        repulsion = near_repulsion_strength * np.exp(-0.5 * (distances / sigma_repel) ** 2)
+        interaction = attraction - repulsion
+        direction = (coordinates[indices] - coordinates[:, None, :]) / np.maximum(
+            distances[:, :, None], 1e-12
+        )
+        coincident = distances <= 1e-12
+        if np.any(coincident):
+            source_rows = np.broadcast_to(
+                np.arange(len(coordinates), dtype=np.int64)[:, None], indices.shape
+            )
+            lower = np.minimum(source_rows, indices)
+            upper = np.maximum(source_rows, indices)
+            pair_code = (lower * 73_856_093) ^ (upper * 19_349_663) ^ iteration
+            angle = (pair_code % 1_000_003) * (2.0 * np.pi / 1_000_003)
+            pair_direction = np.stack((np.cos(angle), np.sin(angle)), axis=2)
+            pair_direction *= np.where(source_rows < indices, 1.0, -1.0)[:, :, None]
+            direction[coincident] = pair_direction[coincident]
+        neighbor_mass = relative_mass[indices]
+        weighted_force = interaction[:, :, None] * direction * neighbor_mass[:, :, None]
+        force = weighted_force.sum(axis=1) / np.maximum(
+            (np.abs(interaction) * neighbor_mass).sum(axis=1, keepdims=True), 1e-12
+        )
+        movement = step_size * local_scale[:, None] * force
+        movement_norm = np.linalg.norm(movement, axis=1)
+        max_movement = step_size * local_scale
+        shrink = np.minimum(1.0, max_movement / np.maximum(movement_norm, 1e-12))
+        coordinates += movement * shrink[:, None]
+        coordinates -= coordinates.mean(axis=0)
+    return coordinates.astype(np.float32)
+
+
+def density_gravity_layout(
+    features: object,
+    embedding: object,
+    *,
+    mode: str = "mexican_hat",
+    neighbors: int = 15,
+    resolution: float = 0.8,
+    random_state: int = 42,
+    core_quantile: float = 0.95,
+    strength: float = 0.2,
+    mass_power: float = 0.5,
+    attraction_strength: float = 0.5,
+    near_repulsion_strength: float = 2.5,
+    force_neighbors: int = 8,
+    attraction_range: float = 1.0,
+    repulsion_range: float = 0.5,
+    step_size: float = 0.05,
+    iterations: int = 3,
+) -> tuple[np.ndarray, dict[str, object]]:
+    """Build feature-space density regions and refine an IMSTE layout.
+
+    RINND supplies approximate feature neighbors, Leiden finds weighted
+    density regions, and a density-core or Mexican-hat force updates the
+    supplied 2D coordinates. No labels or notebook state are used.
+    """
+    from scipy.sparse import issparse
+
+    if mode not in {"density_core", "mexican_hat"}:
+        raise ValueError("mode must be 'density_core' or 'mexican_hat'.")
+    if issparse(features):
+        raise ValueError("gravity refinement currently requires dense features.")
+    X = np.asarray(features, dtype=np.float32)
+    coordinates = np.asarray(embedding, dtype=np.float64)
+    if X.ndim != 2 or coordinates.shape != (len(X), 2) or len(X) < 3:
+        raise ValueError("features and embedding must have matching rows and 2D coordinates.")
+    if not np.isfinite(X).all() or not np.isfinite(coordinates).all():
+        raise ValueError("features and embedding must contain only finite values.")
+    if not 1 <= int(neighbors) < len(X):
+        raise ValueError("neighbors must be in [1, n_samples).")
+
+    try:
+        from rinnd import RINND
+        import igraph as ig
+        import leidenalg
+    except ImportError as error:
+        raise ImportError(
+            "Gravity refinement requires RINND, igraph, and leidenalg. "
+            "Install them with `pip install 'rinnd>=0.3.1' 'igraph>=0.11' "
+            "'leidenalg>=0.10'`."
+        ) from error
+
+    graph_started = time.perf_counter()
+    search = RINND(
+        np.ascontiguousarray(X),
+        metric="euclidean",
+        n_neighbors=int(neighbors),
+        random_state=int(random_state),
+        n_trees=8,
+        n_iters=max(5, int(round(np.log2(len(X))))),
+        max_candidates=max(20, min(60, int(round(1.5 * int(neighbors))))),
+        n_jobs=-1,
+        verbose=False,
+    )
+    indices, distances = search.neighbor_graph
+    indices = np.asarray(indices, dtype=np.int64)
+    distances = np.asarray(distances, dtype=np.float32)
+    radii = np.maximum(np.max(distances, axis=1), 1e-12)
+    raw_mass = (np.median(radii) / radii) ** 2
+    point_mass = np.clip(
+        raw_mass, np.percentile(raw_mass, 1), np.percentile(raw_mass, 99)
+    ).astype(np.float32)
+
+    rows = np.repeat(np.arange(len(X), dtype=np.int64), indices.shape[1])
+    columns = indices.reshape(-1)
+    edge_distances = distances.reshape(-1)
+    valid = (columns >= 0) & (columns != rows) & np.isfinite(edge_distances)
+    rows, columns, edge_distances = rows[valid], columns[valid], edge_distances[valid]
+    edge_weights = np.exp(
+        -edge_distances / np.maximum(radii[rows], 1e-12)
+    ).astype(np.float32)
+    graph = ig.Graph(
+        n=len(X), edges=zip(rows.tolist(), columns.tolist()), directed=False
+    )
+    graph.es["weight"] = edge_weights.tolist()
+    graph.simplify(multiple=True, loops=True, combine_edges={"weight": "sum"})
+    partition = leidenalg.find_partition(
+        graph,
+        leidenalg.RBConfigurationVertexPartition,
+        weights="weight",
+        resolution_parameter=float(resolution),
+        seed=int(random_state),
+        n_iterations=2,
+    )
+    membership = np.asarray(partition.membership, dtype=np.int32)
+    region_count = int(membership.max()) + 1
+    region_mass = np.bincount(membership, weights=point_mass, minlength=region_count)
+    graph_seconds = time.perf_counter() - graph_started
+
+    order = np.argsort(membership, kind="stable")
+    sorted_membership = membership[order]
+    sorted_mass = point_mass[order]
+    boundaries = np.r_[0, np.flatnonzero(np.diff(sorted_membership)) + 1, len(order)]
+    thresholds = np.empty(region_count, dtype=np.float32)
+    for start, stop in zip(boundaries[:-1], boundaries[1:]):
+        region = sorted_membership[start]
+        thresholds[region] = np.quantile(sorted_mass[start:stop], core_quantile)
+    core = point_mass >= thresholds[membership]
+    core_mass = np.bincount(
+        membership[core], weights=point_mass[core], minlength=region_count
+    )
+    centers = np.zeros((region_count, 2), dtype=np.float64)
+    np.add.at(centers, membership[core], coordinates[core] * point_mass[core, None])
+    centers /= core_mass[:, None]
+    region_strength = np.clip(
+        strength * (region_mass / np.median(region_mass)) ** mass_power,
+        0.0,
+        0.9,
+    )
+    result = coordinates + region_strength[membership, None] * (
+        centers[membership] - coordinates
+    )
+
+    force_started = time.perf_counter()
+    if mode == "mexican_hat":
+        result = apply_local_mexican_hat_force(
+            result,
+            point_mass,
+            attraction_strength=attraction_strength,
+            near_repulsion_strength=near_repulsion_strength,
+            attraction_range=attraction_range,
+            repulsion_range=repulsion_range,
+            neighbors=force_neighbors,
+            step_size=step_size,
+            iterations=iterations,
+            mass_power=mass_power,
+        )
+    result = np.asarray(result, dtype=np.float64)
+    result -= result.mean(axis=0)
+    result = result.astype(np.float32)
+    if not np.isfinite(result).all():
+        raise ValueError("Gravity refinement produced non-finite coordinates.")
+    force_seconds = time.perf_counter() - force_started
+    return result, {
+        "membership": membership,
+        "point_mass": point_mass,
+        "region_count": region_count,
+        "graph_seconds": graph_seconds,
+        "force_seconds": force_seconds,
+    }

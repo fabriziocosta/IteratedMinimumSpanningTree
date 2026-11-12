@@ -11,6 +11,52 @@ from sklearn.metrics import pairwise_distances
 from sklearn.metrics.pairwise import euclidean_distances
 
 
+def _cosine_safe_normalize(X: object) -> np.ndarray | csr_matrix:
+    """Normalize rows without squaring their original, possibly huge, values."""
+    if issparse(X):
+        source = csr_matrix(X, dtype=np.float64, copy=False)
+        if source.data.size == 0 or np.max(np.abs(source.data)) <= 1.0:
+            row_norms = np.fromiter(
+                (
+                    np.linalg.norm(source.data[source.indptr[row]:source.indptr[row + 1]])
+                    for row in range(source.shape[0])
+                ),
+                dtype=np.float64,
+                count=source.shape[0],
+            )
+            if np.allclose(row_norms, 1.0, rtol=1e-12, atol=1e-12):
+                return source
+        result = source.copy()
+        for row in range(result.shape[0]):
+            start, stop = result.indptr[row : row + 2]
+            values = result.data[start:stop]
+            if values.size == 0:
+                continue
+            scale = float(np.max(np.abs(values)))
+            if scale == 0.0:
+                continue
+            values /= scale
+            norm = float(np.linalg.norm(values))
+            if norm > 0.0:
+                values /= norm
+        return result
+
+    source = np.asarray(X, dtype=np.float64)
+    if source.size == 0:
+        return source
+    if np.max(np.abs(source)) <= 1.0:
+        norms = np.linalg.norm(source, axis=1, keepdims=True)
+        if np.allclose(norms, 1.0, rtol=1e-12, atol=1e-12):
+            return source
+    result = source
+    scales = np.max(np.abs(result), axis=1, keepdims=True)
+    safe_scales = np.where(scales > 0.0, scales, 1.0)
+    result = result / safe_scales
+    norms = np.linalg.norm(result, axis=1, keepdims=True)
+    safe_norms = np.where(norms > 0.0, norms, 1.0)
+    return result / safe_norms
+
+
 def iterated_prim_edges(
     X: object,
     n_msts: int,
@@ -29,6 +75,8 @@ def iterated_prim_edges(
             csr_matrix(X), n_msts, progress_callback, return_ranks=return_ranks,
             metric=metric,
         )
+    if metric == "cosine":
+        X = _cosine_safe_normalize(X)
     distances = (
         cdist(X, X, metric="euclidean")
         if metric == "euclidean"
@@ -53,6 +101,8 @@ def _iterated_sparse_prim_edges(
 ) -> tuple[np.ndarray, np.ndarray]:
     """Exact Prim over CSR rows without forming an all-pairs matrix."""
     n_samples = X.shape[0]
+    if metric == "cosine":
+        X = _cosine_safe_normalize(X)
     used_neighbors: list[set[int]] = [set() for _ in range(n_samples)]
     edge_last_rank: dict[tuple[int, int], int] = {}
     edges: list[tuple[int, int]] = []
