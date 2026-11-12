@@ -298,7 +298,18 @@ score into `[-1, 1]`. This preserves the relative scale between PCA axes. Set
 `pca_init_scaling="none"` to preserve raw PCA score magnitudes, or
 `pca_init=False` to use the seeded random initialization instead.
 `fit_graph()` uses the same PCA initialization when `init_features` is supplied;
-otherwise it uses random initialization.
+otherwise it uses random initialization. Pass `init_coordinates` with shape
+`(n_samples, n_components)` to start from explicit coordinates instead:
+
+```python
+mapper = IteratedMinimumSpanningTreeEmbedder(
+    n_msts=5,
+    init_coordinates=umap_coordinates,
+)
+embedding = mapper.fit_transform(X)
+```
+The coordinate rows must correspond to `X` in the same order. Explicit
+coordinates take precedence over `pca_init` and are used at their supplied scale.
 
 The selected device is available as `mapper.device_` after fitting.
 `device="auto"` keeps graph construction and optimization on CPU. With

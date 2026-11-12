@@ -251,6 +251,9 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
     pca_init_scaling : {'global', 'none'}, default='global'
         Apply one uniform scale so all PCA coordinates fit in ``[-1, 1]``, or
         preserve the raw PCA score magnitudes. Does not affect random initialization.
+    init_coordinates : array-like of shape (n_samples, n_components), default=None
+        Explicit starting coordinates for optimization. These take precedence
+        over PCA and random initialization and must follow the input row order.
     n_epochs : int, default=200
         Number of optimization epochs.
     batch_size : int, default=32768
@@ -326,6 +329,7 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
         mst_representatives_per_component: int = 10,
         pca_init: bool = True,
         pca_init_scaling: str = "global",
+        init_coordinates: object | None = None,
     ) -> None:
         self.n_msts = n_msts
         self.n_components = n_components
@@ -348,6 +352,7 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
         self.mst_progress_callback = mst_progress_callback
         self.mst_representatives_per_component = mst_representatives_per_component
         self.pca_init_scaling = pca_init_scaling
+        self.init_coordinates = init_coordinates
 
     def _validated_fit_options(self) -> dict[str, object]:
         n_msts = _positive_integer("n_msts", self.n_msts)
@@ -435,19 +440,31 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
         X_checked: object | None = None,
         X_original: object | None = None,
         initialization_features: object | None = None,
+        initial_coordinates: object | None = None,
         **options,
     ) -> "IteratedMinimumSpanningTreeEmbedder":
         """Optimize coordinates from a graph and attach fitted diagnostics.
 
         ``X_checked`` distinguishes feature-based fits from ``fit_graph``.
-        Either a feature-based fit or explicit ``initialization_features`` can
-        provide the standardized PCA initialization.
+        Feature inputs can provide PCA initialization, while
+        ``initial_coordinates`` directly supplies the optimizer's starting
+        coordinates when present.
         """
         embedding_started = time.perf_counter()
         rng = np.random.RandomState(self.random_state)
         seed = int(rng.randint(0, np.iinfo(np.int32).max))
         pca_features = X_checked if initialization_features is None else initialization_features
-        if pca_features is not None and options["pca_init"]:
+        if initial_coordinates is not None:
+            coordinates = check_array(
+                initial_coordinates, dtype=np.float64, ensure_2d=True
+            )
+            if coordinates.shape != (n_samples, n_components):
+                raise ValueError(
+                    "init_coordinates must have shape "
+                    f"({n_samples}, {n_components}); got {coordinates.shape}."
+                )
+            coordinates = coordinates.astype(np.float32, copy=True)
+        elif pca_features is not None and options["pca_init"]:
             coordinates = _standardized_pca_initialization(
                 pca_features, n_components, self.random_state
             )
@@ -527,7 +544,9 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
         PCA scores are uniformly scaled by their global maximum absolute value
         so every coordinate fits in ``[-1, 1]``. Set
         ``pca_init_scaling="none"`` to preserve raw magnitudes, or
-        ``pca_init=False`` to use the seeded random start.
+        ``pca_init=False`` to use the seeded random start. Supplying
+        ``init_coordinates`` starts from those coordinates instead and takes
+        precedence over either setting.
 
         Successful fits expose stage timings in seconds: `graph_construction_time_`,
         `embedding_optimization_time_`, `optimizer_negative_sampling_time_`,
@@ -571,6 +590,7 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
             X_checked=X_checked,
             X_original=X,
             initialization_features=X_checked,
+            initial_coordinates=self.init_coordinates,
             **{
                 name: value
                 for name, value in options.items()
@@ -595,10 +615,12 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
         their attraction weights.
 
         ``init_features`` optionally supplies the sample-by-feature matrix used
-        for standardized PCA initialization. Its rows must match the graph's
-        rows in the same order. The supplied features initialize coordinates
-        only; graph edges still determine the optimization objective. Without
-        features, the seeded random initialization is used. The fitted
+        for standardized PCA initialization. ``init_coordinates`` can instead
+        supply a complete initial embedding with one row per graph node and one
+        column per output dimension; it takes precedence over PCA. All rows
+        must follow the graph's order. Initialization affects coordinates only;
+        graph edges still determine the optimization objective. Without either
+        form of initialization, the seeded random start is used. The fitted
         coordinates are available as ``embedding_``; feature-based ``transform``
         is unavailable after ``fit_graph``.
         """
@@ -641,6 +663,7 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
             resolved_device=options["resolved_device"],
             schedule_by_rank=True,
             initialization_features=initialization_features,
+            initial_coordinates=self.init_coordinates,
             **{
                 name: value
                 for name, value in options.items()
