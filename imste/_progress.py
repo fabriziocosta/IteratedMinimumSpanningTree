@@ -32,7 +32,7 @@ class IMSTEProgressReporter:
         self._refinement_level_index = -1
         self._refinement_level_count = 0
         try:
-            from tqdm import tqdm
+            from tqdm.auto import tqdm
         except ImportError:  # Keep verbose fitting useful without notebook extras.
             tqdm = None
         self._tqdm = tqdm
@@ -92,6 +92,9 @@ class IMSTEProgressReporter:
     def mst_callback(self, completed: int, total: int, detail: str) -> None:
         stage = self._stage_name(detail)
         if detail.startswith("Coarsening level"):
+            # Keep only one live bar: stacked terminal bars emit cursor-up
+            # escape sequences that notebook output can display literally.
+            self._close_bar("graph")
             if self._coarsening_stage != detail:
                 if self._coarsening_stage is not None:
                     self._coarsening_offset += self._coarsening_level_total
@@ -123,6 +126,12 @@ class IMSTEProgressReporter:
             return
 
         if detail.startswith("Refining level"):
+            if self._refinement_level_index < 0:
+                bar = self._bars["coarsening"]
+                if bar is not None:
+                    bar.n = bar.total
+                    bar.refresh()
+                self._close_bar("coarsening")
             self._refinement_level_index += 1
             self._refinement_offset = self._refinement_level_index * self._refinement_epochs
             self._epoch_phase = "Multilevel refinement epochs"
