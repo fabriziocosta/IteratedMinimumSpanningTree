@@ -75,6 +75,41 @@ def test_fit_timing_diagnostics_are_finite_and_bounded():
     )
 
 
+def test_verbose_fit_reports_each_macro_phase_when_it_finishes(capsys):
+    IteratedMinimumSpanningTreeEmbedder(
+        n_msts=1,
+        n_epochs=0,
+        random_state=5,
+        multilevel_init=True,
+        verbose=True,
+    ).fit(small_data())
+
+    output = capsys.readouterr().out
+    assert "MST graph construction complete:" in output
+    assert "Multilevel initialization complete:" in output
+    assert "Final embedding optimization complete:" in output
+    assert "Total measured:" in output
+
+
+def test_verbose_multilevel_progress_uses_global_level_bars(capsys):
+    IteratedMinimumSpanningTreeEmbedder(
+        n_msts=1,
+        n_epochs=0,
+        multilevel_init=True,
+        multilevel_base_size=2,
+        multilevel_epochs=1,
+        mst_method="prim",
+        random_state=5,
+        verbose=True,
+    ).fit(small_data())
+
+    captured = capsys.readouterr()
+    output = captured.out + captured.err
+    assert "Multilevel coarsening" in output
+    assert "Multilevel refinement epochs" in output
+    assert "refine level 1 epochs" not in output
+
+
 def test_progress_callback_reports_completed_epochs_in_order():
     events = []
     IteratedMinimumSpanningTreeEmbedder(

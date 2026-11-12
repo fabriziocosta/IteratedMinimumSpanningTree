@@ -604,6 +604,12 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
             self.multilevel_initialization_time_ = (
                 time.perf_counter() - multilevel_started
             )
+            if self._progress_reporter is not None:
+                self._progress_reporter.multilevel_finished()
+                self._progress_reporter.phase_finished(
+                    "Multilevel initialization",
+                    self.multilevel_initialization_time_,
+                )
             if coordinates is None:
                 coordinates = self._default_initialization(
                     rng, pca_features, n_samples, n_components, options
@@ -661,6 +667,11 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
         self.final_embedding_optimization_time_ = (
             time.perf_counter() - final_optimization_started
         )
+        if self._progress_reporter is not None:
+            self._progress_reporter.phase_finished(
+                "Final embedding optimization",
+                self.final_embedding_optimization_time_,
+            )
         if self._active_mst_progress_callback is not None:
             self._active_mst_progress_callback(
                 options["n_epochs"],
@@ -733,6 +744,10 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
         )
         if not levels:
             return None
+        if self._progress_reporter is not None:
+            self._progress_reporter.begin_multilevel_refinement(
+                len(levels), options["multilevel_epochs"]
+            )
 
         quotient_edges = np.asarray(edges, dtype=np.int64)
         quotient_weights = 1.0 / np.asarray(ranks, dtype=np.float64)
@@ -884,6 +899,10 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
         )
         tree_ranks = np.asarray(tree_ranks, dtype=np.int32)
         self.graph_construction_time_ = time.perf_counter() - graph_started
+        if self._progress_reporter is not None:
+            self._progress_reporter.phase_finished(
+                "MST graph construction", self.graph_construction_time_
+            )
         return self._fit_edges(
             n_samples=n_samples,
             n_components=options["n_components"],
@@ -965,6 +984,10 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
             return_ranks=True,
         )
         self.graph_construction_time_ = time.perf_counter() - graph_started
+        if self._progress_reporter is not None:
+            self._progress_reporter.phase_finished(
+                "MST graph construction", self.graph_construction_time_
+            )
         tree_ranks = np.asarray(tree_ranks, dtype=np.int32)
         return self._fit_edges(
             n_samples=distance_graph.shape[0],
