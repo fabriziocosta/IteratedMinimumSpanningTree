@@ -105,6 +105,78 @@ def apply_local_mexican_hat_force(
         coordinates -= coordinates.mean(axis=0)
     return coordinates.astype(np.float32)
 
+
+def _sampled_silhouette_score(
+    coordinates: np.ndarray,
+    labels: np.ndarray,
+    *,
+    sample_size: int,
+    random_state: int,
+    chunk_size: int = 512,
+) -> float:
+    """Compute Euclidean silhouette with chunked SciPy distances.
+
+    Using ``cdist`` avoids the large BLAS matrix products used by sklearn's
+    Euclidean distance path, which emit spurious overflow warnings on some
+    Apple BLAS builds even for small, finite 2D coordinates.
+    """
+    from scipy.spatial.distance import cdist
+
+    coordinates = np.asarray(coordinates, dtype=np.float64)
+    labels = np.asarray(labels)
+    if coordinates.ndim != 2 or coordinates.shape[1] != 2:
+        raise ValueError("coordinates must have shape (n_samples, 2).")
+    if len(coordinates) != len(labels):
+        raise ValueError("coordinates and labels must have equal lengths.")
+    if not np.isfinite(coordinates).all():
+        raise ValueError("coordinates must contain only finite values.")
+    if isinstance(sample_size, bool) or int(sample_size) < 2:
+        raise ValueError("sample_size must be an integer of at least 2.")
+
+    size = min(int(sample_size), len(coordinates))
+    indices = np.random.RandomState(random_state).permutation(len(coordinates))[:size]
+    sampled_coordinates = coordinates[indices]
+    sampled_labels = labels[indices]
+    _, encoded_labels = np.unique(sampled_labels, return_inverse=True)
+    class_count = int(encoded_labels.max()) + 1
+    if class_count < 2 or class_count >= size:
+        raise ValueError("Silhouette requires between 2 and n_samples - 1 labels.")
+    counts = np.bincount(encoded_labels, minlength=class_count)
+    scores = np.zeros(size, dtype=np.float64)
+
+    for start in range(0, size, chunk_size):
+        stop = min(start + chunk_size, size)
+        distances = cdist(sampled_coordinates[start:stop], sampled_coordinates)
+        class_means = np.empty((stop - start, class_count), dtype=np.float64)
+        for class_index in range(class_count):
+            class_means[:, class_index] = (
+                distances[:, encoded_labels == class_index].sum(axis=1)
+                / counts[class_index]
+            )
+        rows = np.arange(start, stop)
+        own_classes = encoded_labels[rows]
+        own_counts = counts[own_classes]
+        own_sum = class_means[np.arange(stop - start), own_classes] * own_counts
+        own_mean = np.divide(
+            own_sum,
+            own_counts - 1,
+            out=np.zeros(stop - start, dtype=np.float64),
+            where=own_counts > 1,
+        )
+        class_means[np.arange(stop - start), own_classes] = np.inf
+        nearest_other_mean = class_means.min(axis=1)
+        denominator = np.maximum(own_mean, nearest_other_mean)
+        scores[start:stop] = np.divide(
+            nearest_other_mean - own_mean,
+            denominator,
+            out=np.zeros(stop - start, dtype=np.float64),
+            where=denominator > 0,
+        )
+        scores[start:stop][own_counts == 1] = 0.0
+
+    return float(scores.mean())
+
+
 def fit_density_gravity_layout(
     X: object,
     labels: object,
@@ -145,7 +217,7 @@ def fit_density_gravity_layout(
     cache_path = Path(cache_dir)
     cache_path.mkdir(parents=True, exist_ok=True)
     cache_payload = {
-        "algorithm_version": "local-mexican-hat-v3",
+        "algorithm_version": "local-mexican-hat-v4",
         "projection_id": str(projection_id),
         "dataset_id": str(dataset_id),
         **settings,
@@ -167,8 +239,6 @@ def fit_density_gravity_layout(
                 "layout_seconds": float(saved["layout_seconds"]) if "layout_seconds" in saved.files else 0.0,
                 "graph_cache_hit": bool(saved["graph_cache_hit"]) if "graph_cache_hit" in saved.files else True,
             }
-
-    from sklearn.metrics import silhouette_score
 
     graph_settings = {
         "dataset_id": str(dataset_id),
@@ -341,13 +411,11 @@ def fit_density_gravity_layout(
     # Silhouette is invariant to uniform scaling. Keep pairwise dot products
     # well within range when an upstream embedding has unusually large values.
     silhouette_scale = max(float(np.max(np.abs(result))), 1.0)
-    silhouette = float(
-        silhouette_score(
-            result[:, :2] / silhouette_scale,
-            np.asarray(labels).astype(str),
-            sample_size=min(5_000, len(labels)),
-            random_state=2027,
-        )
+    silhouette = _sampled_silhouette_score(
+        result[:, :2] / silhouette_scale,
+        np.asarray(labels).astype(str),
+        sample_size=min(5_000, len(labels)),
+        random_state=2027,
     )
     layout_seconds = time.perf_counter() - layout_started
     seconds = graph_seconds + layout_seconds
