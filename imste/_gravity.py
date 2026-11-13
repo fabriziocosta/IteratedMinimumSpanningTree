@@ -164,11 +164,10 @@ def density_gravity_layout(
     """Build feature-space density regions and refine an IMSTE layout.
 
     RINND supplies approximate feature neighbors and Leiden finds weighted
-    density regions. ``density_core`` contracts points toward their weighted
-    region centers. ``mexican_hat`` keeps the supplied coordinates as its
-    starting layout and applies only the local attraction/repulsion force, so
-    the core-center contraction cannot overwhelm that mode's repulsion. No
-    labels or notebook state are used.
+    density regions. Both modes pull points toward density-weighted region
+    cores. ``density_core`` applies only that regional pull; ``mexican_hat``
+    follows it with local attraction/repulsion to preserve within-region
+    structure. No labels or notebook state are used.
     """
     from scipy.sparse import issparse
 
@@ -265,16 +264,11 @@ def density_gravity_layout(
         0.0,
         0.9,
     )
-    # The density-core mode is intentionally contractive: it pulls each
-    # point toward a density-weighted region center.  Mexican-hat mode has a
-    # local force model of its own, so applying the same center pull first
-    # would collapse dense regions before local repulsion can respond.
-    if mode == "density_core":
-        result = coordinates + region_strength[membership, None] * (
-            centers[membership] - coordinates
-        )
-    else:
-        result = coordinates.copy()
+    # The feature-space regions must affect both modes. Mexican-hat then adds
+    # local repulsion/attraction to retain structure around each pulled core.
+    result = coordinates + region_strength[membership, None] * (
+        centers[membership] - coordinates
+    )
 
     force_started = time.perf_counter()
     if mode == "mexican_hat":

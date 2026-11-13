@@ -315,8 +315,8 @@ error. The per-edge maximum and component pairs remain available for review.
 | `gravity_mode` | `"mexican_hat"` | Optional density-aware second phase; set to `None` to disable |
 | `gravity_neighbors` | `15` | Feature-space neighbors for the RINND/Leiden region graph |
 | `gravity_resolution` | `0.8` | Leiden partition resolution |
-| `gravity_strength` | `0.2` | Density-core attraction strength |
-| `gravity_core_quantile` | `0.95` | Within-region density quantile defining the core |
+| `gravity_strength` | `0.2` | Attraction toward each density-weighted region core |
+| `gravity_core_quantile` | `0.95` | Within-region density quantile defining the core points |
 | `gravity_mass_power` | `0.5` | Exponent controlling point and region mass effects |
 | `gravity_attraction_strength` | `0.5` | Attraction strength for local Mexican-hat forces |
 | `gravity_near_repulsion_strength` | `2.5` | Repulsion strength for close embedded neighbors |

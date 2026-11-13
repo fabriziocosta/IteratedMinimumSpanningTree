@@ -545,7 +545,8 @@ def prepare_arxiv_projection_cache(
         umap_settings.get("compatibility_layout"),
     ]
     projection_settings = {
-        "cache_schema": 2,
+        # Bump when gravity layout semantics change so old coordinates refit.
+        "cache_schema": 3,
         "data_id": dataset_id,
         "metric": metric,
         "umap": umap_key,

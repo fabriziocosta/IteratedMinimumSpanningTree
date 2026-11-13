@@ -203,6 +203,7 @@ def render_datashader_embedding(
     spread_px: int = 0,
     spread_threshold: float = 0.5,
     spread_shape: str = "circle",
+    draw_border: bool = True,
 ):
     """Rasterize a 2D embedding with Datashader.
 
@@ -221,7 +222,8 @@ def render_datashader_embedding(
     once the requested local pixel density is reached. Only one spread mode may
     be enabled at a time. Set ``preserve_aspect`` to use the same pixel scale
     for both coordinate axes; this may add empty canvas margins to avoid
-    stretching the embedding.
+    stretching the embedding. Set ``draw_border=False`` to omit the thin black
+    border around the returned image.
     """
     coordinates = _embedding_array(embedding)
     if coordinates.ndim != 2 or coordinates.shape[1] != 2:
@@ -272,6 +274,8 @@ def render_datashader_embedding(
 
     if not isinstance(preserve_aspect, (bool, np.bool_)):
         raise ValueError("preserve_aspect must be a boolean.")
+    if not isinstance(draw_border, (bool, np.bool_)):
+        raise ValueError("draw_border must be a boolean.")
     if preserve_aspect:
         x_limits = np.asarray(
             x_range if x_range is not None else (coordinates[:, 0].min(), coordinates[:, 0].max()),
@@ -354,7 +358,23 @@ def render_datashader_embedding(
             max_px=int(max_spread_px),
             shape=spread_shape,
         )
-    return tf.set_background(image, background)
+    image = tf.set_background(image, background)
+    if draw_border:
+        bordered_data = image.data.copy()
+        black = np.uint32(0xFF000000)
+        # Two source pixels keep the border visible when a large render is
+        # scaled down for a multi-panel figure.
+        bordered_data[:2, :] = black
+        bordered_data[-2:, :] = black
+        bordered_data[:, :2] = black
+        bordered_data[:, -2:] = black
+        image = tf.Image(
+            bordered_data,
+            coords=image.coords,
+            dims=image.dims,
+            attrs=image.attrs,
+        )
+    return image
 
 
 def plot_density_parent_tree(
