@@ -53,6 +53,16 @@ For Euclidean input distances, classical MDS produces the same principal-coordin
   - Check that the graph uses Euclidean distances and includes enough neighbors for the gravity settings; retain a fresh-search fallback when it is missing or incompatible.
   - Compare graph-construction time and verify that reuse preserves the intended regions, density weights, and gravity output.
 
+## Try a mean-shift gravity variant
+
+- [ ] Implement mean shift as a separate experimental gravity mode; keep the current gravity method as the baseline because it already works well.
+  - Use the original-space approximate-neighbor graph and distances to define kernel-weighted neighborhoods, reusing the existing graph where compatible.
+  - Move each point in 2D toward the weighted mean of its feature-space neighbors' current 2D coordinates.
+  - Retain short-range repulsion based on 2D proximity to prevent projected points from collapsing or overlapping.
+  - Reduce exposed attraction parameters where adaptive bandwidths and normalized mean-shift updates can determine them; keep only necessary repulsion controls.
+  - Compare both methods on the same datasets and settings, measuring runtime, cluster separation, local-neighbor preservation, and stability.
+  - Decide whether to switch the default only after the comparison shows a consistent improvement.
+
 ## Add a Datashader embedding visualization
 
 - [ ] Add an optional Datashader renderer for large two-dimensional embeddings.
