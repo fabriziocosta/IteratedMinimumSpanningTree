@@ -222,7 +222,7 @@ def render_datashader_embedding(
     once the requested local pixel density is reached. Only one spread mode may
     be enabled at a time. Set ``preserve_aspect`` to use the same pixel scale
     for both coordinate axes; this may add empty canvas margins to avoid
-    stretching the embedding. Set ``draw_border=False`` to omit the thin black
+    stretching the embedding. Set ``draw_border=False`` to omit the thin gray
     border around the returned image.
     """
     coordinates = _embedding_array(embedding)
@@ -361,13 +361,13 @@ def render_datashader_embedding(
     image = tf.set_background(image, background)
     if draw_border:
         bordered_data = image.data.copy()
-        black = np.uint32(0xFF000000)
-        # Two source pixels keep the border visible when a large render is
-        # scaled down for a multi-panel figure.
-        bordered_data[:2, :] = black
-        bordered_data[-2:, :] = black
-        bordered_data[:, :2] = black
-        bordered_data[:, -2:] = black
+        gray = np.uint32(0xFF808080)
+        # Use two source pixels so the border stays even when a large render
+        # is reduced to fit a notebook panel.
+        bordered_data[:2, :] = gray
+        bordered_data[-2:, :] = gray
+        bordered_data[:, :2] = gray
+        bordered_data[:, -2:] = gray
         image = tf.Image(
             bordered_data,
             coords=image.coords,

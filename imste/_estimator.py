@@ -1056,9 +1056,11 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
         Successful fits expose stage timings in seconds: `graph_construction_time_`,
         `multilevel_initialization_time_`, `final_embedding_optimization_time_`,
         `embedding_optimization_time_`, `optimizer_negative_sampling_time_`,
-        `optimizer_coordinate_update_time_`, and total `fit_time_`. MPS reports
-        negative sampling and coordinate updates as one combined duration to
-        avoid per-batch Metal event recording on long fits.
+        `optimizer_coordinate_update_time_`, and total `fit_time_`. Gravity fits
+        also expose `gravity_neighbor_search_time_` and
+        `gravity_neighbor_graph_reused_`. MPS reports negative sampling and
+        coordinate updates as one combined duration to avoid per-batch Metal
+        event recording on long fits.
         """
         fit_started = time.perf_counter()
         del y  # Unsupervised: labels are intentionally never used.
@@ -1089,11 +1091,25 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
         self._activate_progress_reporting()
         graph_started = time.perf_counter()
         candidate_neighbor_edges: list[np.ndarray] = []
+        gravity_neighbor_graphs: list[tuple[np.ndarray, np.ndarray]] = []
         candidate_edges_callback = (
             candidate_neighbor_edges.append
             if options["include_knn_attraction"]
             else None
         )
+
+        reuse_graph_for_gravity = (
+            options["gravity_mode"] is not None
+            and self.mst_method == "famst"
+            and options["metric"] == "euclidean"
+            and not issparse(X_checked)
+        )
+
+        def capture_gravity_neighbor_graph(
+            indices: np.ndarray, distances: np.ndarray
+        ) -> None:
+            gravity_neighbor_graphs.append((indices, distances))
+
         edges, tree_ranks = build_mst_edges(
             metric_features,
             n_msts=options["n_msts"],
@@ -1109,6 +1125,9 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
             return_ranks=True,
             metric=options["metric"],
             candidate_edges_callback=candidate_edges_callback,
+            neighbor_graph_callback=(
+                capture_gravity_neighbor_graph if reuse_graph_for_gravity else None
+            ),
         )
         tree_ranks = np.asarray(tree_ranks, dtype=np.int32)
         if options["include_knn_attraction"]:
@@ -1166,6 +1185,8 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
                 self.gravity_region_count_ = 0
                 self.gravity_regions_packed_ = False
                 self.gravity_graph_construction_time_ = 0.0
+                self.gravity_neighbor_search_time_ = 0.0
+                self.gravity_neighbor_graph_reused_ = False
                 self.gravity_force_time_ = 0.0
                 self.gravity_time_ = 0.0
                 self.fit_time_ = time.perf_counter() - fit_started
@@ -1197,6 +1218,12 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
                 pack_regions=options["gravity_pack_regions"],
                 pack_radius_quantile=options["gravity_pack_radius_quantile"],
                 pack_gap_fraction=options["gravity_pack_gap_fraction"],
+                feature_neighbor_graph=(
+                    gravity_neighbor_graphs[-1] if gravity_neighbor_graphs else None
+                ),
+                feature_neighbor_metric=(
+                    "euclidean" if gravity_neighbor_graphs else None
+                ),
             )
             self.embedding_ = self.embedding_before_gravity_.copy()
             self.embedding_[:, :2] = gravity_embedding
@@ -1207,12 +1234,20 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
             self.gravity_graph_construction_time_ = float(
                 gravity_diagnostics["graph_seconds"]
             )
+            self.gravity_neighbor_search_time_ = float(
+                gravity_diagnostics["neighbor_search_seconds"]
+            )
+            self.gravity_neighbor_graph_reused_ = bool(
+                gravity_diagnostics["neighbor_graph_reused"]
+            )
             self.gravity_force_time_ = float(gravity_diagnostics["force_seconds"])
             self.gravity_time_ = time.perf_counter() - gravity_started
         else:
             self.gravity_region_count_ = 0
             self.gravity_regions_packed_ = False
             self.gravity_graph_construction_time_ = 0.0
+            self.gravity_neighbor_search_time_ = 0.0
+            self.gravity_neighbor_graph_reused_ = False
             self.gravity_force_time_ = 0.0
             self.gravity_time_ = 0.0
             for name in ("gravity_membership_", "gravity_point_mass_"):
@@ -1376,6 +1411,12 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
                 self.gravity_graph_construction_time_ = float(
                     diagnostics["graph_seconds"]
                 )
+                self.gravity_neighbor_search_time_ = float(
+                    diagnostics["neighbor_search_seconds"]
+                )
+                self.gravity_neighbor_graph_reused_ = bool(
+                    diagnostics["neighbor_graph_reused"]
+                )
                 self.gravity_force_time_ = float(diagnostics["force_seconds"])
                 self.gravity_time_ = time.perf_counter() - gravity_started
                 if hasattr(self, "gravity_skipped_reason_"):
@@ -1384,12 +1425,16 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
                 self.gravity_region_count_ = 0
                 self.gravity_regions_packed_ = False
                 self.gravity_graph_construction_time_ = 0.0
+                self.gravity_neighbor_search_time_ = 0.0
+                self.gravity_neighbor_graph_reused_ = False
                 self.gravity_force_time_ = 0.0
                 self.gravity_time_ = 0.0
         else:
             self.gravity_region_count_ = 0
             self.gravity_regions_packed_ = False
             self.gravity_graph_construction_time_ = 0.0
+            self.gravity_neighbor_search_time_ = 0.0
+            self.gravity_neighbor_graph_reused_ = False
             self.gravity_force_time_ = 0.0
             self.gravity_time_ = 0.0
             if options["gravity_mode"] is not None:

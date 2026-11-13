@@ -139,6 +139,60 @@ def pack_region_centers_on_ring(
     return packed.astype(np.float32)
 
 
+def _compatible_neighbor_graph(
+    graph: tuple[object, object] | None,
+    *,
+    n_samples: int,
+    neighbors: int,
+    metric: str | None,
+) -> tuple[np.ndarray, np.ndarray] | None:
+    """Validate and normalize a reusable Euclidean feature-neighbor graph."""
+    if graph is None or metric != "euclidean":
+        return None
+    try:
+        raw_indices, raw_distances = graph
+        indices = np.asarray(raw_indices)
+        distances = np.asarray(raw_distances, dtype=np.float64)
+    except (TypeError, ValueError):
+        return None
+    if (
+        indices.ndim != 2
+        or distances.shape != indices.shape
+        or indices.shape[0] != n_samples
+        or indices.shape[1] < neighbors
+        or not np.issubdtype(indices.dtype, np.integer)
+    ):
+        return None
+
+    indices = indices.astype(np.int64, copy=False)
+    row_indices = np.arange(n_samples, dtype=np.int64)[:, None]
+    valid = (
+        (indices >= 0)
+        & (indices < n_samples)
+        & (indices != row_indices)
+        & np.isfinite(distances)
+        & (distances >= 0)
+    )
+    if np.any(valid.sum(axis=1) < neighbors):
+        return None
+
+    # Reject duplicate rows rather than silently assigning duplicate weight to
+    # one point in the Leiden graph. ANN backends normally return unique rows.
+    by_index = np.argsort(np.where(valid, indices, n_samples), axis=1, kind="stable")
+    sorted_indices = np.take_along_axis(indices, by_index, axis=1)
+    duplicates = sorted_indices[:, 1:] == sorted_indices[:, :-1]
+    duplicates &= sorted_indices[:, 1:] < n_samples
+    if np.any(duplicates):
+        return None
+
+    by_distance = np.argsort(
+        np.where(valid, distances, np.inf), axis=1, kind="stable"
+    )[:, :neighbors]
+    selected_indices = np.take_along_axis(indices, by_distance, axis=1)
+    selected_distances = np.take_along_axis(distances, by_distance, axis=1)
+    return selected_indices, selected_distances.astype(np.float32, copy=False)
+
+
 def density_gravity_layout(
     features: object,
     embedding: object,
@@ -160,14 +214,17 @@ def density_gravity_layout(
     pack_regions: bool = False,
     pack_radius_quantile: float = 0.9,
     pack_gap_fraction: float = 0.25,
+    feature_neighbor_graph: tuple[object, object] | None = None,
+    feature_neighbor_metric: str | None = None,
 ) -> tuple[np.ndarray, dict[str, object]]:
     """Build feature-space density regions and refine an IMSTE layout.
 
-    RINND supplies approximate feature neighbors and Leiden finds weighted
-    density regions. Both modes pull points toward density-weighted region
-    cores. ``density_core`` applies only that regional pull; ``mexican_hat``
-    follows it with local attraction/repulsion to preserve within-region
-    structure. No labels or notebook state are used.
+    A compatible Euclidean feature-neighbor graph is reused when supplied;
+    otherwise RINND builds one. Leiden finds weighted density regions. Both
+    modes pull points toward density-weighted region cores. ``density_core``
+    applies only that regional pull; ``mexican_hat`` follows it with local
+    attraction/repulsion to preserve within-region structure. No labels or
+    notebook state are used.
     """
     from scipy.sparse import issparse
 
@@ -187,31 +244,57 @@ def density_gravity_layout(
         raise ValueError("neighbors must be in [1, n_samples).")
 
     try:
-        from rinnd import RINND
         import igraph as ig
         import leidenalg
     except ImportError as error:
         raise ImportError(
-            "Gravity refinement requires RINND, igraph, and leidenalg. "
-            "Install them with `pip install 'rinnd>=0.3.1' 'igraph>=0.11' "
-            "'leidenalg>=0.10'`."
+            "Gravity refinement requires igraph and leidenalg. Install them with "
+            "`pip install 'igraph>=0.11' 'leidenalg>=0.10'`."
         ) from error
 
     graph_started = time.perf_counter()
-    search = RINND(
-        np.ascontiguousarray(X),
-        metric="euclidean",
-        n_neighbors=int(neighbors),
-        random_state=int(random_state),
-        n_trees=8,
-        n_iters=max(5, int(round(np.log2(len(X))))),
-        max_candidates=max(20, min(60, int(round(1.5 * int(neighbors))))),
-        n_jobs=-1,
-        verbose=False,
+    reusable_graph = _compatible_neighbor_graph(
+        feature_neighbor_graph,
+        n_samples=len(X),
+        neighbors=int(neighbors),
+        metric=feature_neighbor_metric,
     )
-    indices, distances = search.neighbor_graph
-    indices = np.asarray(indices, dtype=np.int64)
-    distances = np.asarray(distances, dtype=np.float32)
+    neighbor_search_seconds = 0.0
+    if reusable_graph is None:
+        try:
+            from rinnd import RINND
+        except ImportError as error:
+            raise ImportError(
+                "Gravity refinement needs a compatible Euclidean feature-neighbor "
+                "graph or RINND for a fresh search. Install it with "
+                "`pip install 'rinnd>=0.3.1'`."
+            ) from error
+        import inspect
+
+        search_options = {
+            "metric": "euclidean",
+            "n_neighbors": int(neighbors),
+            "random_state": int(random_state),
+            "n_trees": 8,
+            "n_iters": max(5, int(round(np.log2(len(X))))),
+            "max_candidates": max(20, min(60, int(round(1.5 * int(neighbors))))),
+            "verbose": False,
+        }
+        try:
+            if "n_jobs" in inspect.signature(RINND).parameters:
+                search_options["n_jobs"] = -1
+        except (TypeError, ValueError):
+            pass
+        search_started = time.perf_counter()
+        search = RINND(np.ascontiguousarray(X), **search_options)
+        indices, distances = search.neighbor_graph
+        neighbor_search_seconds = time.perf_counter() - search_started
+        indices = np.asarray(indices, dtype=np.int64)
+        distances = np.asarray(distances, dtype=np.float32)
+        neighbor_graph_reused = False
+    else:
+        indices, distances = reusable_graph
+        neighbor_graph_reused = True
     radii = np.maximum(np.max(distances, axis=1), 1e-12)
     raw_mass = (np.median(radii) / radii) ** 2
     point_mass = np.clip(
@@ -302,6 +385,8 @@ def density_gravity_layout(
         "point_mass": point_mass,
         "region_count": region_count,
         "graph_seconds": graph_seconds,
+        "neighbor_search_seconds": neighbor_search_seconds,
+        "neighbor_graph_reused": neighbor_graph_reused,
         "force_seconds": force_seconds,
         "regions_packed": bool(pack_regions and region_count > 1),
     }

@@ -20,6 +20,7 @@ from numba import njit
 
 ProgressCallback = Callable[[int, int, str], None]
 CandidateEdgesCallback = Callable[[np.ndarray], None]
+NeighborGraphCallback = Callable[[np.ndarray, np.ndarray], None]
 
 
 @njit(cache=True)
@@ -364,6 +365,8 @@ def _ann_edges(
     X: np.ndarray,
     neighbors: int,
     random_state: int | None,
+    *,
+    neighbor_graph_callback: NeighborGraphCallback | None = None,
 ) -> dict[tuple[int, int], float]:
     try:
         from pynndescent import NNDescent
@@ -381,6 +384,8 @@ def _ann_edges(
         n_jobs=-1,
     )
     indices, distances = index.neighbor_graph
+    if neighbor_graph_callback is not None:
+        neighbor_graph_callback(np.asarray(indices), np.asarray(distances))
     return _neighbor_edges_to_dict(indices, distances)
 
 
@@ -404,6 +409,7 @@ def _ann_edges_rinnd(
     random_state: int | None,
     *,
     verbose: bool = False,
+    neighbor_graph_callback: NeighborGraphCallback | None = None,
 ) -> dict[tuple[int, int], float]:
     """Build a dense Euclidean candidate graph with RINND."""
     RINND = _rinnd_class()
@@ -427,6 +433,8 @@ def _ann_edges_rinnd(
         verbose=verbose,
     )
     indices, distances = index.neighbor_graph
+    if neighbor_graph_callback is not None:
+        neighbor_graph_callback(np.asarray(indices), np.asarray(distances))
     return _neighbor_edges_to_dict(indices, distances)
 
 
@@ -434,6 +442,7 @@ def _ann_edges_mps(
     X: np.ndarray,
     neighbors: int,
     progress_callback: ProgressCallback | None = None,
+    neighbor_graph_callback: NeighborGraphCallback | None = None,
 ) -> dict[tuple[int, int], float]:
     """Build an exact k-neighbor candidate graph with chunked MPS distances."""
     import torch
@@ -475,10 +484,11 @@ def _ann_edges_mps(
         if progress_callback is not None:
             progress_callback(chunk_index, n_chunks, "FAMST MPS neighbor search")
 
-    return _neighbor_edges_to_dict(
-        np.concatenate(all_indices, axis=0),
-        np.concatenate(all_distances, axis=0),
-    )
+    indices = np.concatenate(all_indices, axis=0)
+    distances = np.concatenate(all_distances, axis=0)
+    if neighbor_graph_callback is not None:
+        neighbor_graph_callback(indices, distances)
+    return _neighbor_edges_to_dict(indices, distances)
 
 
 def _neighbor_edges_to_dict(
@@ -742,6 +752,7 @@ def iterated_famst_edges(
     return_ranks: bool = False,
     metric: str = "euclidean",
     candidate_edges_callback: CandidateEdgesCallback | None = None,
+    neighbor_graph_callback: NeighborGraphCallback | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Build ranked trees from an adaptive sparse neighbor graph."""
     if neighbor_backend not in {"auto", "rinnd", "pynndescent", "mps_exact"}:
@@ -803,6 +814,22 @@ def iterated_famst_edges(
         if progress_callback is not None:
             progress_callback(0, n_msts, detail)
         seed = int(rng.randint(0, np.iinfo(np.int32).max))
+        local_neighbor_graph: tuple[np.ndarray, np.ndarray] | None = None
+
+        def capture_neighbor_graph(
+            indices: np.ndarray, distances: np.ndarray
+        ) -> None:
+            nonlocal local_neighbor_graph
+            local_neighbor_graph = (indices, distances)
+
+        graph_callback = (
+            capture_neighbor_graph if neighbor_graph_callback is not None else None
+        )
+        graph_callback_option = (
+            {"neighbor_graph_callback": graph_callback}
+            if graph_callback is not None
+            else {}
+        )
         dense_euclidean = not issparse(X) and metric == "euclidean"
         rinnd = _rinnd_class() if dense_euclidean else None
         use_rinnd = neighbor_backend == "rinnd" or (
@@ -814,19 +841,27 @@ def iterated_famst_edges(
                 current_neighbors,
                 seed,
                 verbose=progress_callback is not None,
+                **graph_callback_option,
             )
         elif neighbor_backend == "pynndescent":
-            candidate_edges = _ann_edges(X, current_neighbors, seed)
+            candidate_edges = _ann_edges(
+                X, current_neighbors, seed,
+                **graph_callback_option,
+            )
         elif neighbor_backend == "mps_exact" or (
             neighbor_backend == "auto"
             and neighbor_device == "mps"
             and dense_euclidean
         ):
             candidate_edges = _ann_edges_mps(
-                X, current_neighbors, progress_callback=progress_callback
+                X, current_neighbors, progress_callback=progress_callback,
+                **graph_callback_option,
             )
         else:
-            candidate_edges = _ann_edges(X, current_neighbors, seed)
+            candidate_edges = _ann_edges(
+                X, current_neighbors, seed,
+                **graph_callback_option,
+            )
         local_neighbor_edges = None
         if candidate_edges_callback is not None:
             local_neighbor_edges = np.fromiter(
@@ -870,6 +905,8 @@ def iterated_famst_edges(
             detail = f"FAMST local repair ({added} edges added)"
         if trees is not None:
             edges, ranks = trees
+            if neighbor_graph_callback is not None and local_neighbor_graph is not None:
+                neighbor_graph_callback(*local_neighbor_graph)
             if candidate_edges_callback is not None:
                 assert local_neighbor_edges is not None
                 candidate_edges_callback(local_neighbor_edges)

@@ -339,6 +339,12 @@ the fit summary reports each macro phase separately. MPS negative sampling and
 coordinate updates are timed together to avoid per-batch Metal event recording
 on long fits.
 
+When gravity follows a feature-based FAMST fit, it reuses the fitted Euclidean
+neighbor search when that graph contains enough valid neighbors. The
+`gravity_neighbor_graph_reused_` and `gravity_neighbor_search_time_` attributes
+report reuse and any fresh-search time. Prim fits and graph-only fits use a
+fresh search when gravity has features available.
+
 By default, `fit(X)` starts coordinate optimization from PCA scores computed
 after feature-wise standardization and uniformly scaled by the maximum absolute
 score into `[-1, 1]`. This preserves the relative scale between PCA axes. Set
