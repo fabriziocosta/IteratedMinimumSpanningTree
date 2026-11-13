@@ -361,15 +361,15 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
         rank-one attractive edges alongside the ranked spanning trees. This
         makes local neighborhoods denser and is available for Euclidean FAMST
         fits.
-    gravity_mode : {'density_core', 'mexican_hat', None}, default='mexican_hat'
+    gravity_mode : {'density_core', 'mexican_hat', None}, default='density_core'
         Apply a density-aware second-phase layout after the IMSTE optimization.
         ``None`` disables gravity. Gravity currently requires dense Euclidean
         features and at least two embedding dimensions; it refines the first two.
     gravity_neighbors : int, default=15
         Feature-space neighbors used to build gravity regions.
-    gravity_resolution : float, default=0.8
+    gravity_resolution : float, default=0.7
         Leiden resolution used to identify gravity regions.
-    gravity_strength : float, default=0.2
+    gravity_strength : float, default=0.3
         Base attraction from each point toward its region's density core when
         gravity is enabled. Mexican-hat mode also applies local attraction and
         repulsion after this regional pull.
@@ -399,15 +399,15 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
         Within-region radial quantile used to estimate each region's ring size.
     gravity_pack_gap_fraction : float, default=0.25
         Gap between ring regions as a fraction of their median estimated radius.
-    mean_shift_neighbors : int, default=50
+    mean_shift_neighbors : int, default=100
         Number of neighbors from the starting 2D layout used for Gaussian mean shift.
-    mean_shift_bandwidth_factor : float, default=1.0
+    mean_shift_bandwidth_factor : float, default=7.0
         Gaussian bandwidth as a multiple of the median current 2D distance to
         the selected neighbor count.
-    mean_shift_step_size : float, default=0.25
+    mean_shift_step_size : float, default=0.9
         Interpolation from each coordinate toward its kernel-weighted mean, in
         the interval [0, 1].
-    mean_shift_iterations : int, default=0
+    mean_shift_iterations : int, default=30
         Mean-shift iterations applied after gravity. Zero disables mean shift.
     mst_inter_component_edges : int, default=5
         FAMST candidate edges retained between each component pair selected by
@@ -463,10 +463,10 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
         metric: str = "euclidean",
         mst_neighbor_backend: str = "auto",
         include_knn_attraction: bool = False,
-        gravity_mode: str | None = "mexican_hat",
+        gravity_mode: str | None = "density_core",
         gravity_neighbors: int = 15,
-        gravity_resolution: float = 0.8,
-        gravity_strength: float = 0.2,
+        gravity_resolution: float = 0.7,
+        gravity_strength: float = 0.3,
         gravity_core_quantile: float = 0.95,
         gravity_mass_power: float = 0.5,
         gravity_attraction_strength: float = 0.5,
@@ -479,10 +479,10 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
         gravity_pack_regions: bool = False,
         gravity_pack_radius_quantile: float = 0.9,
         gravity_pack_gap_fraction: float = 0.25,
-        mean_shift_neighbors: int = 50,
-        mean_shift_bandwidth_factor: float = 1.0,
-        mean_shift_step_size: float = 0.25,
-        mean_shift_iterations: int = 0,
+        mean_shift_neighbors: int = 100,
+        mean_shift_bandwidth_factor: float = 7.0,
+        mean_shift_step_size: float = 0.9,
+        mean_shift_iterations: int = 30,
     ) -> None:
         self.n_msts = n_msts
         self.n_components = n_components
