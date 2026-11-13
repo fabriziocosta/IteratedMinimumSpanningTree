@@ -46,6 +46,13 @@ For Euclidean input distances, classical MDS produces the same principal-coordin
   - Compare with random and PCA initialization using the same graph, optimizer settings, seeds, runtime, and quality measures.
   - Keep the approach experimental unless results show a repeatable benefit.
 
+## Reuse the feature-space neighbor graph for gravity
+
+- [ ] Avoid rebuilding the RINND graph for gravity when a compatible feature-space neighbor graph is already available from IMSTE/FAMST.
+  - Reuse its neighbor indices and distances to compute local radii, density weights, and the weighted Leiden graph.
+  - Check that the graph uses Euclidean distances and includes enough neighbors for the gravity settings; retain a fresh-search fallback when it is missing or incompatible.
+  - Compare graph-construction time and verify that reuse preserves the intended regions, density weights, and gravity output.
+
 ## Add a Datashader embedding visualization
 
 - [ ] Add an optional Datashader renderer for large two-dimensional embeddings.
