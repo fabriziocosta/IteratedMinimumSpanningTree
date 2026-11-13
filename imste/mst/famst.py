@@ -367,6 +367,7 @@ def _ann_edges(
     random_state: int | None,
     *,
     neighbor_graph_callback: NeighborGraphCallback | None = None,
+    neighbor_graph_neighbors: int | None = None,
 ) -> dict[tuple[int, int], float]:
     try:
         from pynndescent import NNDescent
@@ -378,15 +379,26 @@ def _ann_edges(
 
     index = NNDescent(
         X,
-        n_neighbors=min(neighbors + 1, X.shape[0]),
+        n_neighbors=min(
+            max(neighbors + 1, neighbor_graph_neighbors or neighbors + 1),
+            X.shape[0],
+        ),
         metric="euclidean",
         random_state=random_state,
         n_jobs=-1,
     )
     indices, distances = index.neighbor_graph
+    order = np.argsort(distances, axis=1, kind="stable")
+    indices = np.take_along_axis(indices, order, axis=1)
+    distances = np.take_along_axis(distances, order, axis=1)
     if neighbor_graph_callback is not None:
         neighbor_graph_callback(np.asarray(indices), np.asarray(distances))
-    return _neighbor_edges_to_dict(indices, distances)
+    # NNDescent historically requested k + 1 to account for a possible self
+    # entry, so preserve that candidate set while returning the wider graph.
+    candidate_width = min(neighbors + 1, indices.shape[1])
+    return _neighbor_edges_to_dict(
+        indices[:, :candidate_width], distances[:, :candidate_width]
+    )
 
 
 def _rinnd_class():
@@ -410,6 +422,7 @@ def _ann_edges_rinnd(
     *,
     verbose: bool = False,
     neighbor_graph_callback: NeighborGraphCallback | None = None,
+    neighbor_graph_neighbors: int | None = None,
 ) -> dict[tuple[int, int], float]:
     """Build a dense Euclidean candidate graph with RINND."""
     RINND = _rinnd_class()
@@ -424,18 +437,26 @@ def _ann_edges_rinnd(
     index = RINND(
         features,
         metric="euclidean",
-        n_neighbors=min(neighbors, n_samples - 1),
+        n_neighbors=min(
+            max(neighbors, neighbor_graph_neighbors or neighbors), n_samples - 1
+        ),
         random_state=random_state,
         n_trees=max(4, min(8, 5 + int(round(n_samples**0.5 / 20.0)))),
         n_iters=max(5, int(round(np.log2(n_samples)))),
-        max_candidates=max(20, min(60, int(1.5 * neighbors))),
+        max_candidates=max(
+            20,
+            min(60, int(1.5 * max(neighbors, neighbor_graph_neighbors or neighbors))),
+        ),
         n_jobs=-1,
         verbose=verbose,
     )
     indices, distances = index.neighbor_graph
+    order = np.argsort(distances, axis=1, kind="stable")
+    indices = np.take_along_axis(indices, order, axis=1)
+    distances = np.take_along_axis(distances, order, axis=1)
     if neighbor_graph_callback is not None:
         neighbor_graph_callback(np.asarray(indices), np.asarray(distances))
-    return _neighbor_edges_to_dict(indices, distances)
+    return _neighbor_edges_to_dict(indices[:, :neighbors], distances[:, :neighbors])
 
 
 def _ann_edges_mps(
@@ -443,6 +464,7 @@ def _ann_edges_mps(
     neighbors: int,
     progress_callback: ProgressCallback | None = None,
     neighbor_graph_callback: NeighborGraphCallback | None = None,
+    neighbor_graph_neighbors: int | None = None,
 ) -> dict[tuple[int, int], float]:
     """Build an exact k-neighbor candidate graph with chunked MPS distances."""
     import torch
@@ -474,10 +496,10 @@ def _ann_edges_mps(
         distances_squared[torch.arange(stop - start, device=device), rows] = torch.inf
         nearest_squared, nearest_indices = torch.topk(
             distances_squared,
-            k=min(neighbors, n_samples - 1),
+            k=min(max(neighbors, neighbor_graph_neighbors or neighbors), n_samples - 1),
             dim=1,
             largest=False,
-            sorted=False,
+            sorted=True,
         )
         all_indices.append(nearest_indices.cpu().numpy())
         all_distances.append(torch.sqrt(nearest_squared).cpu().numpy())
@@ -488,7 +510,7 @@ def _ann_edges_mps(
     distances = np.concatenate(all_distances, axis=0)
     if neighbor_graph_callback is not None:
         neighbor_graph_callback(indices, distances)
-    return _neighbor_edges_to_dict(indices, distances)
+    return _neighbor_edges_to_dict(indices[:, :neighbors], distances[:, :neighbors])
 
 
 def _neighbor_edges_to_dict(
@@ -753,6 +775,7 @@ def iterated_famst_edges(
     metric: str = "euclidean",
     candidate_edges_callback: CandidateEdgesCallback | None = None,
     neighbor_graph_callback: NeighborGraphCallback | None = None,
+    neighbor_graph_neighbors: int | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Build ranked trees from an adaptive sparse neighbor graph."""
     if neighbor_backend not in {"auto", "rinnd", "pynndescent", "mps_exact"}:
@@ -842,11 +865,13 @@ def iterated_famst_edges(
                 seed,
                 verbose=progress_callback is not None,
                 **graph_callback_option,
+                neighbor_graph_neighbors=neighbor_graph_neighbors,
             )
         elif neighbor_backend == "pynndescent":
             candidate_edges = _ann_edges(
                 X, current_neighbors, seed,
                 **graph_callback_option,
+                neighbor_graph_neighbors=neighbor_graph_neighbors,
             )
         elif neighbor_backend == "mps_exact" or (
             neighbor_backend == "auto"
@@ -856,11 +881,13 @@ def iterated_famst_edges(
             candidate_edges = _ann_edges_mps(
                 X, current_neighbors, progress_callback=progress_callback,
                 **graph_callback_option,
+                neighbor_graph_neighbors=neighbor_graph_neighbors,
             )
         else:
             candidate_edges = _ann_edges(
                 X, current_neighbors, seed,
                 **graph_callback_option,
+                neighbor_graph_neighbors=neighbor_graph_neighbors,
             )
         local_neighbor_edges = None
         if candidate_edges_callback is not None:

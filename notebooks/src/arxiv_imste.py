@@ -479,6 +479,7 @@ def save_arxiv_projection_cache(
     umap_seconds: float,
     imste_seconds: float,
     gravity_seconds: float = 0.0,
+    mean_shift_seconds: float = 0.0,
     dataset_id: str,
 ) -> Path:
     """Atomically save both layouts and the fit metadata to the projection cache."""
@@ -506,6 +507,7 @@ def save_arxiv_projection_cache(
         umap_seconds=np.asarray(umap_seconds),
         imste_seconds=np.asarray(imste_seconds),
         gravity_seconds=np.asarray(gravity_seconds),
+        mean_shift_seconds=np.asarray(mean_shift_seconds),
         dataset_id=np.asarray(dataset_id),
         settings_json=np.asarray(json.dumps(
             {
@@ -545,8 +547,8 @@ def prepare_arxiv_projection_cache(
         umap_settings.get("compatibility_layout"),
     ]
     projection_settings = {
-        # Bump when gravity layout semantics change so old coordinates refit.
-        "cache_schema": 3,
+        # Bump when sequential gravity / mean-shift semantics change.
+        "cache_schema": 4,
         "data_id": dataset_id,
         "metric": metric,
         "umap": umap_key,
@@ -557,15 +559,15 @@ def prepare_arxiv_projection_cache(
                 "gravity_neighbors": 15,
                 "gravity_resolution": 0.8,
                 "gravity_strength": 0.2,
-                "gravity_core_quantile": 0.95,
-                "gravity_mass_power": 0.5,
-                "gravity_attraction_strength": 0.5,
-                "gravity_near_repulsion_strength": 2.5,
-                "gravity_force_neighbors": 8,
-                "gravity_attraction_range": 1.0,
-                "gravity_repulsion_range": 0.5,
-                "gravity_step_size": 0.05,
-                "gravity_iterations": 3,
+            }.items()
+        },
+        "mean_shift": {
+            key: imste_settings.get(key, default)
+            for key, default in {
+                "mean_shift_neighbors": 50,
+                "mean_shift_bandwidth_factor": 1.0,
+                "mean_shift_step_size": 0.25,
+                "mean_shift_iterations": 0,
             }.items()
         },
         "imste": [
@@ -670,6 +672,11 @@ def prepare_arxiv_projection_cache(
                     "gravity_seconds": (
                         float(saved["gravity_seconds"])
                         if "gravity_seconds" in saved.files
+                        else 0.0
+                    ),
+                    "mean_shift_seconds": (
+                        float(saved["mean_shift_seconds"])
+                        if "mean_shift_seconds" in saved.files
                         else 0.0
                     ),
                 }

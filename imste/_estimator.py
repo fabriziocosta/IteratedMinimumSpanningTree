@@ -399,6 +399,16 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
         Within-region radial quantile used to estimate each region's ring size.
     gravity_pack_gap_fraction : float, default=0.25
         Gap between ring regions as a fraction of their median estimated radius.
+    mean_shift_neighbors : int, default=50
+        Number of neighbors from the starting 2D layout used for Gaussian mean shift.
+    mean_shift_bandwidth_factor : float, default=1.0
+        Gaussian bandwidth as a multiple of the median current 2D distance to
+        the selected neighbor count.
+    mean_shift_step_size : float, default=0.25
+        Interpolation from each coordinate toward its kernel-weighted mean, in
+        the interval [0, 1].
+    mean_shift_iterations : int, default=0
+        Mean-shift iterations applied after gravity. Zero disables mean shift.
     mst_inter_component_edges : int, default=5
         FAMST candidate edges retained between each component pair selected by
         the representative MST.
@@ -469,6 +479,10 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
         gravity_pack_regions: bool = False,
         gravity_pack_radius_quantile: float = 0.9,
         gravity_pack_gap_fraction: float = 0.25,
+        mean_shift_neighbors: int = 50,
+        mean_shift_bandwidth_factor: float = 1.0,
+        mean_shift_step_size: float = 0.25,
+        mean_shift_iterations: int = 0,
     ) -> None:
         self.n_msts = n_msts
         self.n_components = n_components
@@ -519,6 +533,10 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
         self.gravity_pack_regions = gravity_pack_regions
         self.gravity_pack_radius_quantile = gravity_pack_radius_quantile
         self.gravity_pack_gap_fraction = gravity_pack_gap_fraction
+        self.mean_shift_neighbors = mean_shift_neighbors
+        self.mean_shift_bandwidth_factor = mean_shift_bandwidth_factor
+        self.mean_shift_step_size = mean_shift_step_size
+        self.mean_shift_iterations = mean_shift_iterations
 
     def _validated_fit_options(self) -> dict[str, object]:
         if not isinstance(self.verbose, (bool, np.bool_)):
@@ -583,9 +601,13 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
             raise ValueError(
                 "gravity_mode must be 'density_core', 'mexican_hat', or None."
             )
-        if self.gravity_mode is not None and self.metric != "euclidean":
+        gravity_strength = _finite_nonnegative(
+            "gravity_strength", self.gravity_strength
+        )
+        gravity_enabled = self.gravity_mode is not None and gravity_strength > 0.0
+        if gravity_enabled and self.metric != "euclidean":
             raise ValueError("gravity refinement currently requires metric='euclidean'.")
-        if self.gravity_mode is not None and n_components < 2:
+        if gravity_enabled and n_components < 2:
             raise ValueError("gravity refinement requires n_components >= 2.")
         gravity_neighbors = _positive_integer(
             "gravity_neighbors", self.gravity_neighbors
@@ -598,9 +620,6 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
         )
         gravity_resolution = _finite_nonnegative(
             "gravity_resolution", self.gravity_resolution, strictly_positive=True
-        )
-        gravity_strength = _finite_nonnegative(
-            "gravity_strength", self.gravity_strength
         )
         gravity_core_quantile = _finite_nonnegative(
             "gravity_core_quantile", self.gravity_core_quantile
@@ -641,6 +660,23 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
         gravity_pack_gap_fraction = _finite_nonnegative(
             "gravity_pack_gap_fraction", self.gravity_pack_gap_fraction
         )
+        mean_shift_neighbors = _positive_integer(
+            "mean_shift_neighbors", self.mean_shift_neighbors
+        )
+        mean_shift_bandwidth_factor = _finite_nonnegative(
+            "mean_shift_bandwidth_factor", self.mean_shift_bandwidth_factor,
+            strictly_positive=True,
+        )
+        mean_shift_step_size = _finite_nonnegative(
+            "mean_shift_step_size", self.mean_shift_step_size
+        )
+        if mean_shift_step_size > 1.0:
+            raise ValueError("mean_shift_step_size must be in [0, 1].")
+        mean_shift_iterations = _positive_integer(
+            "mean_shift_iterations", self.mean_shift_iterations, allow_zero=True
+        )
+        if mean_shift_iterations and n_components < 2:
+            raise ValueError("mean shift requires n_components >= 2.")
         learning_rate = _finite_nonnegative(
             "learning_rate", self.learning_rate, strictly_positive=True
         )
@@ -699,6 +735,7 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
             "resolved_device": resolved_device,
             "metric": self.metric,
             "gravity_mode": self.gravity_mode,
+            "gravity_enabled": gravity_enabled,
             "gravity_neighbors": gravity_neighbors,
             "gravity_resolution": gravity_resolution,
             "gravity_strength": gravity_strength,
@@ -714,6 +751,10 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
             "gravity_pack_regions": bool(self.gravity_pack_regions),
             "gravity_pack_radius_quantile": gravity_pack_radius_quantile,
             "gravity_pack_gap_fraction": gravity_pack_gap_fraction,
+            "mean_shift_neighbors": mean_shift_neighbors,
+            "mean_shift_bandwidth_factor": mean_shift_bandwidth_factor,
+            "mean_shift_step_size": mean_shift_step_size,
+            "mean_shift_iterations": mean_shift_iterations,
         }
 
     def _activate_progress_reporting(self) -> None:
@@ -1042,6 +1083,69 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
                     )
         return coordinates
 
+    @staticmethod
+    def _feature_neighbor_graph(
+        features: object,
+        neighbors: int,
+        metric: str,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Build the original feature-space KNN graph used by refinements."""
+        from sklearn.neighbors import NearestNeighbors
+
+        n_samples = features.shape[0]
+        k = min(int(neighbors), n_samples - 1)
+        index = NearestNeighbors(
+            n_neighbors=min(k + 1, n_samples), metric=metric, n_jobs=-1
+        ).fit(features)
+        distances, indices = index.kneighbors(features, return_distance=True)
+        result_indices = np.empty((n_samples, k), dtype=np.int64)
+        result_distances = np.empty((n_samples, k), dtype=np.float64)
+        for row in range(n_samples):
+            keep = indices[row] != row
+            row_indices = indices[row, keep][:k]
+            row_distances = distances[row, keep][:k]
+            order = np.argsort(row_distances, kind="stable")
+            result_indices[row] = row_indices[order]
+            result_distances[row] = row_distances[order]
+        return result_indices, result_distances
+
+    def _apply_mean_shift(
+        self,
+        options: dict[str, object],
+    ) -> None:
+        """Apply mean shift after gravity using base-layout neighbors."""
+        self.embedding_before_mean_shift_ = self.embedding_.copy()
+        self.mean_shift_neighbor_search_time_ = 0.0
+        self.mean_shift_time_ = 0.0
+        self.mean_shift_iterations_ = 0
+        iterations = int(options["mean_shift_iterations"])
+        step_size = float(options["mean_shift_step_size"])
+        self.mean_shift_neighbor_graph_reused_ = False
+        if iterations == 0 or step_size == 0.0:
+            return
+
+        from ._mean_shift import embedding_neighbor_indices, gaussian_mean_shift_layout
+
+        started = time.perf_counter()
+        base_layout = self.embedding_before_gravity_[:, :2]
+        neighbor_indices = embedding_neighbor_indices(
+            base_layout,
+            min(int(options["mean_shift_neighbors"]), len(self.embedding_) - 1),
+        )
+        self.mean_shift_neighbor_search_time_ = time.perf_counter() - started
+        self.mean_shift_neighbor_graph_reused_ = True
+        refined, diagnostics = gaussian_mean_shift_layout(
+            self.embedding_[:, :2],
+            neighbor_indices=neighbor_indices,
+            neighbors=min(int(options["mean_shift_neighbors"]), len(self.embedding_) - 1),
+            bandwidth_factor=float(options["mean_shift_bandwidth_factor"]),
+            step_size=step_size,
+            iterations=iterations,
+        )
+        self.embedding_[:, :2] = refined
+        self.mean_shift_time_ = time.perf_counter() - started
+        self.mean_shift_iterations_ = int(diagnostics["iterations"])
+
     def fit(self, X: object, y: object = None) -> "IteratedMinimumSpanningTreeEmbedder":
         """Fit the embedding and store coordinates for the input rows.
 
@@ -1058,13 +1162,19 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
         `embedding_optimization_time_`, `optimizer_negative_sampling_time_`,
         `optimizer_coordinate_update_time_`, and total `fit_time_`. Gravity fits
         also expose `gravity_neighbor_search_time_` and
-        `gravity_neighbor_graph_reused_`. MPS reports negative sampling and
+        `gravity_neighbor_graph_reused_`. Feature based FAMST gravity fits expose
+        the high-dimensional graph used by gravity as
+        `feature_neighbor_graph_`. Mean shift runs after gravity and exposes
+        its stage time and iteration count. MPS reports negative sampling and
         coordinate updates as one combined duration to avoid per-batch Metal
         event recording on long fits.
         """
         fit_started = time.perf_counter()
         del y  # Unsupervised: labels are intentionally never used.
         options = self._validated_fit_options()
+        for name in ("feature_neighbor_graph_", "feature_neighbor_graph_reused_"):
+            if hasattr(self, name):
+                delattr(self, name)
         X_checked = check_array(
             X, dtype=np.float64, ensure_2d=True, accept_sparse="csr"
         )
@@ -1098,9 +1208,12 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
             else None
         )
 
-        reuse_graph_for_gravity = (
-            options["gravity_mode"] is not None
-            and self.mst_method == "famst"
+        refinements_need_graph = options["gravity_enabled"]
+        feature_graph_width = max(
+            options["gravity_neighbors"], options["gravity_force_neighbors"]
+        )
+        reuse_graph_for_refinements = (
+            self.mst_method == "famst"
             and options["metric"] == "euclidean"
             and not issparse(X_checked)
         )
@@ -1125,9 +1238,10 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
             return_ranks=True,
             metric=options["metric"],
             candidate_edges_callback=candidate_edges_callback,
-            neighbor_graph_callback=(
-                capture_gravity_neighbor_graph if reuse_graph_for_gravity else None
-            ),
+            neighbor_graph_callback=capture_gravity_neighbor_graph
+            if reuse_graph_for_refinements else None,
+            neighbor_graph_neighbors=feature_graph_width
+            if reuse_graph_for_refinements else None,
         )
         tree_ranks = np.asarray(tree_ranks, dtype=np.int32)
         if options["include_knn_attraction"]:
@@ -1173,26 +1287,30 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
                     "gravity_step_size", "gravity_iterations",
                     "gravity_pack_regions", "gravity_pack_radius_quantile",
                     "gravity_pack_gap_fraction",
+                    "gravity_enabled", "mean_shift_neighbors",
+                    "mean_shift_bandwidth_factor", "mean_shift_step_size",
+                    "mean_shift_iterations",
                 }
             },
         )
         self.embedding_before_gravity_ = self.embedding_.copy()
         self.imste_fit_time_ = self.fit_time_
-        if options["gravity_mode"] is not None:
+        feature_neighbor_graph = gravity_neighbor_graphs[-1] if gravity_neighbor_graphs else None
+        if feature_neighbor_graph is not None:
+            self.feature_neighbor_graph_ = feature_neighbor_graph
+            self.feature_neighbor_graph_reused_ = True
+        else:
+            self.feature_neighbor_graph_reused_ = False
+        if refinements_need_graph and feature_neighbor_graph is None:
+            feature_neighbor_graph = self._feature_neighbor_graph(
+                metric_features,
+                feature_graph_width,
+                options["metric"],
+            )
+            self.feature_neighbor_graph_ = feature_neighbor_graph
+        if options["gravity_enabled"] and n_samples >= 3:
             if issparse(X_checked):
                 raise ValueError("gravity refinement currently requires dense features.")
-            if n_samples < 3:
-                self.gravity_region_count_ = 0
-                self.gravity_regions_packed_ = False
-                self.gravity_graph_construction_time_ = 0.0
-                self.gravity_neighbor_search_time_ = 0.0
-                self.gravity_neighbor_graph_reused_ = False
-                self.gravity_force_time_ = 0.0
-                self.gravity_time_ = 0.0
-                self.fit_time_ = time.perf_counter() - fit_started
-                if self._progress_reporter is not None:
-                    self._progress_reporter.finish()
-                return self
             from ._gravity import density_gravity_layout
 
             gravity_started = time.perf_counter()
@@ -1218,11 +1336,9 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
                 pack_regions=options["gravity_pack_regions"],
                 pack_radius_quantile=options["gravity_pack_radius_quantile"],
                 pack_gap_fraction=options["gravity_pack_gap_fraction"],
-                feature_neighbor_graph=(
-                    gravity_neighbor_graphs[-1] if gravity_neighbor_graphs else None
-                ),
+                feature_neighbor_graph=feature_neighbor_graph,
                 feature_neighbor_metric=(
-                    "euclidean" if gravity_neighbor_graphs else None
+                    "euclidean" if feature_neighbor_graph is not None else None
                 ),
             )
             self.embedding_ = self.embedding_before_gravity_.copy()
@@ -1255,6 +1371,7 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
                     delattr(self, name)
             if hasattr(self, "gravity_skipped_reason_"):
                 del self.gravity_skipped_reason_
+        self._apply_mean_shift(options)
         self.fit_time_ = time.perf_counter() - fit_started
         if self._progress_reporter is not None:
             self._progress_reporter.finish()
@@ -1267,11 +1384,12 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
         *,
         return_intermediate: bool = False,
     ) -> np.ndarray | tuple[np.ndarray, np.ndarray]:
-        """Fit and return final coordinates, optionally with pre-gravity ones.
+        """Fit and return final coordinates, optionally with the base layout.
 
         When ``return_intermediate=True``, return a pair containing the
-        optimized IMSTE coordinates before gravity and the final coordinates
-        after gravity. With ``gravity_mode=None``, both arrays are identical.
+        optimized IMSTE coordinates before refinement and the final coordinates
+        after gravity and mean shift. Disabled refinements leave the corresponding
+        stage unchanged.
         """
         if not isinstance(return_intermediate, (bool, np.bool_)):
             raise ValueError("return_intermediate must be a boolean.")
@@ -1308,6 +1426,9 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
         """
         fit_started = time.perf_counter()
         options = self._validated_fit_options()
+        for name in ("feature_neighbor_graph_", "feature_neighbor_graph_reused_"):
+            if hasattr(self, name):
+                delattr(self, name)
         if options["include_knn_attraction"]:
             raise ValueError(
                 "include_knn_attraction is available for feature-based fit(X), "
@@ -1334,9 +1455,15 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
                 raise ValueError(
                     "init_features must have one row per distance_graph node."
                 )
-        if options["gravity_mode"] is not None and initialization_features is not None:
+        if options["gravity_enabled"] and initialization_features is not None:
             if issparse(initialization_features):
                 raise ValueError("gravity refinement currently requires dense features.")
+        mean_shift_enabled = (
+            options["mean_shift_iterations"] > 0
+            and options["mean_shift_step_size"] > 0
+        )
+        if mean_shift_enabled and initialization_features is None:
+            raise ValueError("mean shift in fit_graph() requires init_features.")
 
         self._activate_progress_reporting()
         graph_started = time.perf_counter()
@@ -1373,62 +1500,63 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
         )
         self.embedding_before_gravity_ = self.embedding_.copy()
         self.imste_fit_time_ = self.fit_time_
-        if options["gravity_mode"] is not None and initialization_features is not None:
-            n_samples = distance_graph.shape[0]
-            if n_samples >= 3:
-                from ._gravity import density_gravity_layout
+        n_samples = distance_graph.shape[0]
+        feature_graph_width = (
+            max(options["gravity_neighbors"], options["gravity_force_neighbors"])
+            if options["gravity_enabled"] else 1
+        )
+        feature_neighbor_graph = None
+        refinements_need_graph = options["gravity_enabled"]
+        if refinements_need_graph and initialization_features is not None:
+            if issparse(initialization_features) and options["gravity_enabled"]:
+                raise ValueError("gravity refinement currently requires dense features.")
+            feature_neighbor_graph = self._feature_neighbor_graph(
+                initialization_features,
+                feature_graph_width,
+                options["metric"],
+            )
+            self.feature_neighbor_graph_ = feature_neighbor_graph
+            self.feature_neighbor_graph_reused_ = False
+        if options["gravity_enabled"] and initialization_features is not None and n_samples >= 3:
+            from ._gravity import density_gravity_layout
 
-                gravity_started = time.perf_counter()
-                gravity_embedding, diagnostics = density_gravity_layout(
-                    initialization_features,
-                    self.embedding_before_gravity_[:, :2],
-                    mode=options["gravity_mode"],
-                    neighbors=min(options["gravity_neighbors"], n_samples - 1),
-                    resolution=options["gravity_resolution"],
-                    random_state=42 if self.random_state is None else self.random_state,
-                    core_quantile=options["gravity_core_quantile"],
-                    strength=options["gravity_strength"],
-                    mass_power=options["gravity_mass_power"],
-                    attraction_strength=options["gravity_attraction_strength"],
-                    near_repulsion_strength=options[
-                        "gravity_near_repulsion_strength"
-                    ],
-                    force_neighbors=min(options["gravity_force_neighbors"], n_samples - 1),
-                    attraction_range=options["gravity_attraction_range"],
-                    repulsion_range=options["gravity_repulsion_range"],
-                    step_size=options["gravity_step_size"],
-                    iterations=options["gravity_iterations"],
-                    pack_regions=options["gravity_pack_regions"],
-                    pack_radius_quantile=options["gravity_pack_radius_quantile"],
-                    pack_gap_fraction=options["gravity_pack_gap_fraction"],
-                )
-                self.embedding_ = self.embedding_before_gravity_.copy()
-                self.embedding_[:, :2] = gravity_embedding
-                self.gravity_membership_ = diagnostics["membership"]
-                self.gravity_point_mass_ = diagnostics["point_mass"]
-                self.gravity_region_count_ = int(diagnostics["region_count"])
-                self.gravity_regions_packed_ = bool(diagnostics["regions_packed"])
-                self.gravity_graph_construction_time_ = float(
-                    diagnostics["graph_seconds"]
-                )
-                self.gravity_neighbor_search_time_ = float(
-                    diagnostics["neighbor_search_seconds"]
-                )
-                self.gravity_neighbor_graph_reused_ = bool(
-                    diagnostics["neighbor_graph_reused"]
-                )
-                self.gravity_force_time_ = float(diagnostics["force_seconds"])
-                self.gravity_time_ = time.perf_counter() - gravity_started
-                if hasattr(self, "gravity_skipped_reason_"):
-                    del self.gravity_skipped_reason_
-            else:
-                self.gravity_region_count_ = 0
-                self.gravity_regions_packed_ = False
-                self.gravity_graph_construction_time_ = 0.0
-                self.gravity_neighbor_search_time_ = 0.0
-                self.gravity_neighbor_graph_reused_ = False
-                self.gravity_force_time_ = 0.0
-                self.gravity_time_ = 0.0
+            gravity_started = time.perf_counter()
+            gravity_embedding, diagnostics = density_gravity_layout(
+                initialization_features,
+                self.embedding_before_gravity_[:, :2],
+                mode=options["gravity_mode"],
+                neighbors=min(options["gravity_neighbors"], n_samples - 1),
+                resolution=options["gravity_resolution"],
+                random_state=42 if self.random_state is None else self.random_state,
+                core_quantile=options["gravity_core_quantile"],
+                strength=options["gravity_strength"],
+                mass_power=options["gravity_mass_power"],
+                attraction_strength=options["gravity_attraction_strength"],
+                near_repulsion_strength=options["gravity_near_repulsion_strength"],
+                force_neighbors=min(options["gravity_force_neighbors"], n_samples - 1),
+                attraction_range=options["gravity_attraction_range"],
+                repulsion_range=options["gravity_repulsion_range"],
+                step_size=options["gravity_step_size"],
+                iterations=options["gravity_iterations"],
+                pack_regions=options["gravity_pack_regions"],
+                pack_radius_quantile=options["gravity_pack_radius_quantile"],
+                pack_gap_fraction=options["gravity_pack_gap_fraction"],
+                feature_neighbor_graph=feature_neighbor_graph,
+                feature_neighbor_metric=options["metric"],
+            )
+            self.embedding_ = self.embedding_before_gravity_.copy()
+            self.embedding_[:, :2] = gravity_embedding
+            self.gravity_membership_ = diagnostics["membership"]
+            self.gravity_point_mass_ = diagnostics["point_mass"]
+            self.gravity_region_count_ = int(diagnostics["region_count"])
+            self.gravity_regions_packed_ = bool(diagnostics["regions_packed"])
+            self.gravity_graph_construction_time_ = float(diagnostics["graph_seconds"])
+            self.gravity_neighbor_search_time_ = float(diagnostics["neighbor_search_seconds"])
+            self.gravity_neighbor_graph_reused_ = bool(diagnostics["neighbor_graph_reused"])
+            self.gravity_force_time_ = float(diagnostics["force_seconds"])
+            self.gravity_time_ = time.perf_counter() - gravity_started
+            if hasattr(self, "gravity_skipped_reason_"):
+                del self.gravity_skipped_reason_
         else:
             self.gravity_region_count_ = 0
             self.gravity_regions_packed_ = False
@@ -1437,7 +1565,7 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
             self.gravity_neighbor_graph_reused_ = False
             self.gravity_force_time_ = 0.0
             self.gravity_time_ = 0.0
-            if options["gravity_mode"] is not None:
+            if options["gravity_enabled"]:
                 self.gravity_skipped_reason_ = (
                     "fit_graph() needs init_features to build the gravity graph."
                 )
@@ -1446,6 +1574,7 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
             for name in ("gravity_membership_", "gravity_point_mass_"):
                 if hasattr(self, name):
                     delattr(self, name)
+        self._apply_mean_shift(options)
         self.fit_time_ = time.perf_counter() - fit_started
         if self._progress_reporter is not None:
             self._progress_reporter.finish()

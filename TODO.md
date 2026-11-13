@@ -2,22 +2,20 @@
 
 
 
-## Reuse the feature-space neighbor graph for gravity
+## Reuse the feature-space neighbor graph for gravity and mean shift
 
-- [x] Avoid rebuilding the feature-neighbor graph for gravity when a compatible graph is available from a feature-based FAMST fit.
-  - [x] Reuse neighbor indices and distances to compute local radii, density weights, and the weighted Leiden graph.
-  - [x] Check that the graph is Euclidean and wide enough; retain a fresh-search fallback when it is missing or incompatible.
+- [x] Capture the high-dimensional feature-space neighbor graph during feature-based FAMST construction and reuse it for gravity and mean shift.
+- [x] Preserve the MST candidate graph by using the same captured graph, with a wider neighbor table for refinement controls.
+- [x] Reuse neighbor indices and distances to compute gravity densities and the mean-shift kernel weights.
+- [x] Apply gravity first, then mean shift over the current 2D coordinates of those same feature neighbors.
+- [x] Allow zero gravity pull and zero mean-shift iterations to disable each refinement.
   - [ ] Compare graph-construction time and verify that reuse preserves the intended regions, density weights, and gravity output.
 
-## Try a mean-shift gravity variant
+## Mean-shift refinement
 
-- [ ] Implement mean shift as a separate experimental gravity mode; keep the current gravity method as the baseline because it already works well.
-  - Use the original-space approximate-neighbor graph and distances to define kernel-weighted neighborhoods, reusing the existing graph where compatible.
-  - Move each point in 2D toward the weighted mean of its feature-space neighbors' current 2D coordinates.
-  - Retain short-range repulsion based on 2D proximity to prevent projected points from collapsing or overlapping.
-  - Reduce exposed attraction parameters where adaptive bandwidths and normalized mean-shift updates can determine them; keep only necessary repulsion controls.
-  - Compare both methods on the same datasets and settings, measuring runtime, cluster separation, local-neighbor preservation, and stability.
-  - Decide whether to switch the default only after the comparison shows a consistent improvement.
+- [x] Add mean shift as an optional estimator phase after gravity.
+- [x] Expose the main controls and the sequential comparison in notebook 07.
+- [ ] Compare base, gravity, and gravity-then-mean-shift layouts on the same datasets and settings.
 
 ## Add a Datashader embedding visualization
 

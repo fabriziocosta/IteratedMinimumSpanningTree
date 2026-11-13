@@ -242,6 +242,17 @@ def density_gravity_layout(
         raise ValueError("features and embedding must contain only finite values.")
     if not 1 <= int(neighbors) < len(X):
         raise ValueError("neighbors must be in [1, n_samples).")
+    if float(strength) == 0.0:
+        return coordinates.astype(np.float32), {
+            "membership": np.zeros(len(X), dtype=np.int32),
+            "point_mass": np.ones(len(X), dtype=np.float32),
+            "region_count": 0,
+            "graph_seconds": 0.0,
+            "neighbor_search_seconds": 0.0,
+            "neighbor_graph_reused": feature_neighbor_graph is not None,
+            "force_seconds": 0.0,
+            "regions_packed": False,
+        }
 
     try:
         import igraph as ig

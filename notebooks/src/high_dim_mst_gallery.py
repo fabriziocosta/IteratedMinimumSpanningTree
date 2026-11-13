@@ -197,18 +197,10 @@ def run_high_dim_mst_gallery(
     gravity_neighbors: int = 15,
     gravity_resolution: float = 0.8,
     gravity_strength: float = 0.2,
-    gravity_core_quantile: float = 0.95,
-    gravity_mass_power: float = 0.5,
-    gravity_attraction_strength: float = 0.5,
-    gravity_near_repulsion_strength: float = 2.5,
-    gravity_force_neighbors: int = 8,
-    gravity_attraction_range: float = 1.0,
-    gravity_repulsion_range: float = 0.5,
-    gravity_step_size: float = 0.05,
-    gravity_iterations: int = 3,
-    gravity_pack_regions: bool = False,
-    gravity_pack_radius_quantile: float = 0.9,
-    gravity_pack_gap_fraction: float = 0.25,
+    mean_shift_neighbors: int = 50,
+    mean_shift_bandwidth_factor: float = 1.0,
+    mean_shift_step_size: float = 0.25,
+    mean_shift_iterations: int = 0,
 ) -> dict[str, object]:
     """Fit and display 2D IMSTE embeddings for several image datasets.
 
@@ -223,8 +215,8 @@ def run_high_dim_mst_gallery(
     cosine graph distances; cosine uses exact Prim construction. Multilevel initialization is
     enabled by default for this gallery and can be configured with the
     ``multilevel_*`` options.
-    Gravity runs as a second phase of the estimator by default. Set
-    ``gravity_mode=None`` to return the base IMSTE layout only.
+    Gravity runs before optional mean shift. Set ``gravity_mode=None`` and
+    ``mean_shift_iterations=0`` to return the base IMSTE layout only.
     """
     if max_samples < 10:
         raise ValueError("max_samples must be at least 10.")
@@ -295,18 +287,10 @@ def run_high_dim_mst_gallery(
                         gravity_neighbors=gravity_neighbors,
                         gravity_resolution=gravity_resolution,
                         gravity_strength=gravity_strength,
-                        gravity_core_quantile=gravity_core_quantile,
-                        gravity_mass_power=gravity_mass_power,
-                        gravity_attraction_strength=gravity_attraction_strength,
-                        gravity_near_repulsion_strength=gravity_near_repulsion_strength,
-                        gravity_force_neighbors=gravity_force_neighbors,
-                        gravity_attraction_range=gravity_attraction_range,
-                        gravity_repulsion_range=gravity_repulsion_range,
-                        gravity_step_size=gravity_step_size,
-                        gravity_iterations=gravity_iterations,
-                        gravity_pack_regions=gravity_pack_regions,
-                        gravity_pack_radius_quantile=gravity_pack_radius_quantile,
-                        gravity_pack_gap_fraction=gravity_pack_gap_fraction,
+                        mean_shift_neighbors=mean_shift_neighbors,
+                        mean_shift_bandwidth_factor=mean_shift_bandwidth_factor,
+                        mean_shift_step_size=mean_shift_step_size,
+                        mean_shift_iterations=mean_shift_iterations,
                     ),
                 ),
             ]
@@ -360,21 +344,14 @@ def run_high_dim_mst_gallery(
                 "gravity_neighbors": estimator.gravity_neighbors,
                 "gravity_resolution": estimator.gravity_resolution,
                 "gravity_strength": estimator.gravity_strength,
-                "gravity_core_quantile": estimator.gravity_core_quantile,
-                "gravity_mass_power": estimator.gravity_mass_power,
-                "gravity_attraction_strength": estimator.gravity_attraction_strength,
-                "gravity_near_repulsion_strength": estimator.gravity_near_repulsion_strength,
-                "gravity_force_neighbors": estimator.gravity_force_neighbors,
-                "gravity_attraction_range": estimator.gravity_attraction_range,
-                "gravity_repulsion_range": estimator.gravity_repulsion_range,
-                "gravity_step_size": estimator.gravity_step_size,
-                "gravity_iterations": estimator.gravity_iterations,
-                "gravity_pack_regions": estimator.gravity_pack_regions,
-                "gravity_pack_radius_quantile": estimator.gravity_pack_radius_quantile,
-                "gravity_pack_gap_fraction": estimator.gravity_pack_gap_fraction,
+                "mean_shift_neighbors": estimator.mean_shift_neighbors,
+                "mean_shift_bandwidth_factor": estimator.mean_shift_bandwidth_factor,
+                "mean_shift_step_size": estimator.mean_shift_step_size,
+                "mean_shift_iterations": estimator.mean_shift_iterations,
                 "gravity_region_count": estimator.gravity_region_count_,
                 "gravity_regions_packed": estimator.gravity_regions_packed_,
                 "gravity_seconds": estimator.gravity_time_,
+                "mean_shift_seconds": estimator.mean_shift_time_,
                 "imste_seconds": estimator.imste_fit_time_,
                 "unique_graph_edges": len(estimator.graph_edges_),
                 "seconds": elapsed,
