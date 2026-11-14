@@ -19,10 +19,13 @@ venv/
 .DS_Store
 
 # Downloaded datasets and large generated artifacts
-/data/
+/data/*
 !/data/arxiv/
 /data/arxiv/*
 !/data/arxiv/prepare_arxiv_dataset.ipynb
+!/data/cifar10/
+/data/cifar10/*
+!/data/cifar10/prepare_cifar_dataset.ipynb
 /data/cifar10/raw/cifar-10-python.tar.gz
 *.npy
 *.npz
@@ -33,3 +36,8 @@ venv/
 *.h5ad
 *.pt
 *.pth
+!/data/cifar10/prepare_cifar_dataset.ipynb
+!/data/paul15/
+!/data/paul15/paul15.h5
+!/data/pbmc3k_raw.h5ad
+!/data/pbmc3k_processed.h5ad

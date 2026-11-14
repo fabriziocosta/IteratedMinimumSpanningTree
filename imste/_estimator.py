@@ -303,7 +303,7 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
     init_coordinates : array-like of shape (n_samples, n_components), default=None
         Explicit starting coordinates for optimization. These take precedence
         over PCA and random initialization and must follow the input row order.
-    multilevel_init : bool, default=False
+    multilevel_init : bool, default=True
         Initialize from a rank-only multilevel coarsening of the fitted graph.
         Explicit ``init_coordinates`` take precedence. If coarsening makes no
         progress, the configured PCA or seeded random initialization is used.
@@ -367,9 +367,9 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
         features and at least two embedding dimensions; it refines the first two.
     gravity_neighbors : int, default=15
         Feature-space neighbors used to build gravity regions.
-    gravity_resolution : float, default=0.7
+    gravity_resolution : float, default=1.0
         Leiden resolution used to identify gravity regions.
-    gravity_strength : float, default=0.3
+    gravity_strength : float, default=0.2
         Base attraction from each point toward its region's density core when
         gravity is enabled. Mexican-hat mode also applies local attraction and
         repulsion after this regional pull.
@@ -401,13 +401,13 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
         Gap between ring regions as a fraction of their median estimated radius.
     mean_shift_neighbors : int, default=100
         Number of neighbors from the starting 2D layout used for Gaussian mean shift.
-    mean_shift_bandwidth_factor : float, default=7.0
+    mean_shift_bandwidth_factor : float, default=5.0
         Gaussian bandwidth as a multiple of the median current 2D distance to
         the selected neighbor count.
-    mean_shift_step_size : float, default=0.9
+    mean_shift_step_size : float, default=1.0
         Interpolation from each coordinate toward its kernel-weighted mean, in
         the interval [0, 1].
-    mean_shift_iterations : int, default=30
+    mean_shift_iterations : int, default=1
         Mean-shift iterations applied after gravity. Zero disables mean shift.
     mst_inter_component_edges : int, default=5
         FAMST candidate edges retained between each component pair selected by
@@ -456,7 +456,7 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
         pca_init: bool = True,
         pca_init_scaling: str = "global",
         init_coordinates: object | None = None,
-        multilevel_init: bool = False,
+        multilevel_init: bool = True,
         multilevel_reduction_ratio: int = 4,
         multilevel_base_size: int = 1024,
         multilevel_epochs: int = 10,
@@ -465,8 +465,8 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
         include_knn_attraction: bool = False,
         gravity_mode: str | None = "density_core",
         gravity_neighbors: int = 15,
-        gravity_resolution: float = 0.7,
-        gravity_strength: float = 0.3,
+        gravity_resolution: float = 1.0,
+        gravity_strength: float = 0.2,
         gravity_core_quantile: float = 0.95,
         gravity_mass_power: float = 0.5,
         gravity_attraction_strength: float = 0.5,
@@ -480,9 +480,9 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
         gravity_pack_radius_quantile: float = 0.9,
         gravity_pack_gap_fraction: float = 0.25,
         mean_shift_neighbors: int = 100,
-        mean_shift_bandwidth_factor: float = 7.0,
-        mean_shift_step_size: float = 0.9,
-        mean_shift_iterations: int = 30,
+        mean_shift_bandwidth_factor: float = 5.0,
+        mean_shift_step_size: float = 1.0,
+        mean_shift_iterations: int = 1,
     ) -> None:
         self.n_msts = n_msts
         self.n_components = n_components

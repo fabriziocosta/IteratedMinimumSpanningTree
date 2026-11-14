@@ -50,7 +50,7 @@ def align_by_axis_flips(reference, candidate):
     return candidate[:, permutation] * signs, {"transform": name, "normalized_mse": scores[best]}
 
 
-def load_biological_datasets(*, random_state=42, n_hvg=2000, n_pcs=50):
+def load_biological_datasets(*, data_dir=None, random_state=42, n_hvg=2000, n_pcs=50):
     """Load full biological datasets and return scaled-HVG PCA coordinates."""
     import scanpy as sc
     from scipy import sparse
@@ -58,12 +58,23 @@ def load_biological_datasets(*, random_state=42, n_hvg=2000, n_pcs=50):
     if n_hvg < 1 or n_pcs < 1:
         raise ValueError("n_hvg and n_pcs must be positive integers.")
 
+    if data_dir is None:
+        data_dir = Path(__file__).resolve().parents[2] / "data"
+    data_dir = Path(data_dir)
+    paul_path = data_dir / "paul15" / "paul15.h5"
+    pbmc_path = data_dir / "pbmc3k_raw.h5ad"
+    pbmc_annotated_path = data_dir / "pbmc3k_processed.h5ad"
+    missing = [path for path in (paul_path, pbmc_path, pbmc_annotated_path) if not path.is_file()]
+    if missing:
+        expected = ", ".join(str(path) for path in missing)
+        raise FileNotFoundError(f"Missing biological dataset file(s): {expected}")
+
     def dense_float32(matrix):
         if sparse.issparse(matrix):
             matrix = matrix.toarray()
         return np.asarray(matrix, dtype=np.float32)
 
-    paul = sc.datasets.paul15()
+    paul = sc.read(paul_path)
     paul_labels = paul.obs["paul15_clusters"].astype(str).to_numpy()
     paul_root = int(paul.uns["iroot"])
     stage_by_cluster = {
@@ -85,8 +96,8 @@ def load_biological_datasets(*, random_state=42, n_hvg=2000, n_pcs=50):
     sc.pp.pca(paul, n_comps=n_pcs, random_state=random_state)
     paul_X = dense_float32(paul.obsm["X_pca"])
 
-    pbmc = sc.datasets.pbmc3k()
-    pbmc_annotated = sc.datasets.pbmc3k_processed()
+    pbmc = sc.read_h5ad(pbmc_path)
+    pbmc_annotated = sc.read_h5ad(pbmc_annotated_path)
     sc.pp.filter_cells(pbmc, min_genes=200)
     sc.pp.filter_genes(pbmc, min_cells=3)
     common = pbmc.obs_names[pbmc.obs_names.isin(pbmc_annotated.obs_names)]
