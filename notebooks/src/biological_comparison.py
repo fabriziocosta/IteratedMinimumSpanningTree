@@ -74,7 +74,8 @@ def load_biological_datasets(*, data_dir=None, random_state=42, n_hvg=2000, n_pc
             matrix = matrix.toarray()
         return np.asarray(matrix, dtype=np.float32)
 
-    paul = sc.read(paul_path)
+    sc.settings.datasetdir = data_dir
+    paul = sc.datasets.paul15()
     paul_labels = paul.obs["paul15_clusters"].astype(str).to_numpy()
     paul_root = int(paul.uns["iroot"])
     stage_by_cluster = {

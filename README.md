@@ -125,7 +125,7 @@ approximate candidate-neighbor edges as rank-one positive edges. This option
 is available for Euclidean `fit(X)` calls with `mst_method="famst"`; it
 increases optimization graph size
 and can change neighborhood fidelity. The
-[balanced arXiv experiment notebook](notebooks/05_arxiv_balanced_imste_experiments.ipynb)
+[balanced arXiv experiment notebook](notebooks/arxiv_balanced_exp.ipynb)
 compares this option with PCA/multilevel and UMAP-warm-start initializations on
 a deterministic, class-balanced subset.
 
@@ -425,27 +425,18 @@ optimization by passing an `IteratedMinimumSpanningTreeEmbedder` as `embedder`.
 
 ## Notebooks
 
-The notebooks are ordered as a short progression from standard high-dimensional
-examples to controlled and biological IMSTE–UMAP comparisons:
+Active experiment notebooks use concise dataset-based names. Dataset preparation notebooks live in their corresponding folders under `data/`.
 
-1. [00 — High-dimensional dataset gallery](notebooks/00_high_dim_mst_gallery.ipynb):
-   run IMSTE on standard image datasets and inspect embedding quality and fit
-   times.
-2. [01 — Synthetic IMSTE and UMAP comparison](notebooks/01_imste_umap_synthetic_comparison.ipynb):
-   compare global layout and local-neighbor behavior on controlled geometries.
-3. [02 — Biological embeddings and trajectories](notebooks/02_biological_imste_umap_comparison.ipynb):
-   evaluate annotated Paul15 and PBMC3k single-cell datasets, then compare
-   GSE52529 myoblast embeddings by observed differentiation time and calculate
-   diffusion pseudotime from the GEO FPKM matrix.
-4. [Prepare the arXiv dataset](data/arxiv/prepare_arxiv_dataset.ipynb):
-   download or reuse the Kaggle metadata, then create one reusable paper-vector
-   cache. Increase its size by replacing the existing cache; smaller selections
-   reuse a prefix without writing another dataset copy.
-5. [03 — arXiv large-dataset comparison](notebooks/03_arxiv_large_dataset_comparison.ipynb):
-   consume the prepared vectors, reuse or fit UMAP and IMSTE coordinates, and
-   save a projection cache for interactive exploration.
-6. [04 — Interactive embedding rendering](notebooks/04_interactive_embedding_rendering.ipynb):
-   interactively render cached MNIST-family and arXiv embeddings with Datashader.
+- [synthetic_exp](notebooks/synthetic_exp.ipynb): compare IMSTE and UMAP on controlled geometries.
+- [biological_exp](notebooks/biological_exp.ipynb): inspect annotated biological datasets and trajectories.
+- [arxiv_exp](notebooks/arxiv_exp.ipynb): compare embeddings of the prepared arXiv sample.
+- [arxiv_balanced_exp](notebooks/arxiv_balanced_exp.ipynb): run balanced embedding experiments.
+- [cifar10_exp](notebooks/cifar10_exp.ipynb): compare CIFAR-10 image-vector embeddings.
+- [arxiv_interactive_exp](notebooks/arxiv_interactive_exp.ipynb): interactively refine the layout with gravity followed by mean shift.
+- [mnist_exp](notebooks/mnist_exp.ipynb): compare MNIST, Fashion-MNIST, and Kuzushiji-MNIST.
+- [tabula_sapiens_exp](notebooks/tabula_sapiens_exp.ipynb): compare tissue and cell-type colorings on shared layouts.
+
+Prepare source data with [the arXiv preparation notebook](data/arxiv/prepare_dataset.ipynb) and [the CIFAR-10 preparation notebook](data/cifar10/prepare_dataset.ipynb).
 
 Earlier exploratory notebooks are in
 [notebooks/archive](notebooks/archive/). This includes the [interactive 2D
