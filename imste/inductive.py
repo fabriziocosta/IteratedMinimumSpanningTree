@@ -5,11 +5,19 @@ from __future__ import annotations
 import time
 
 import numpy as np
-import torch
-from torch import nn
+
+try:
+    import torch
+    from torch import nn
+except ImportError as error:
+    raise ImportError(
+        "InductiveIMSTE requires PyTorch. Install it with "
+        "`python -m pip install 'imste[gpu]'`."
+    ) from error
+
+from scipy.sparse import issparse
 from sklearn.base import BaseEstimator, TransformerMixin, clone
 from sklearn.utils.validation import check_array, check_is_fitted
-from scipy.sparse import issparse
 
 from ._estimator import (
     IteratedMinimumSpanningTreeEmbedder,

@@ -11,17 +11,39 @@ an MLP that maps new rows into that space.
 
 ## Install
 
+After the first PyPI release, install the core package with:
+
+```bash
+python -m pip install imste
+```
+
 From a source checkout:
 
 ```bash
 python -m pip install .
 ```
 
-For notebooks, install the optional plotting and widget dependencies:
+For the PyTorch GPU optimizer, inductive estimator, and differentiable loss
+functions, install the optional PyTorch extra:
 
 ```bash
-python -m pip install ".[notebook]"
+python -m pip install "imste[gpu]"
 ```
+
+From a source checkout, use `python -m pip install ".[gpu]"` instead.
+
+CPU use does not require PyTorch; `device="auto"` falls back to the CPU
+optimizer when PyTorch or a supported GPU is unavailable. For notebooks, install
+the optional plotting and widget dependencies:
+
+```bash
+python -m pip install "imste[notebook]"
+```
+
+From a source checkout, use `python -m pip install ".[notebook]"` instead.
+
+For maintainers preparing a release, see the
+[release guide](docs/releasing.md).
 
 Both estimators accept dense arrays and SciPy CSR matrices. The graph builders
 keep CSR inputs sparse. `InductiveIMSTE` densifies only each MLP mini-batch.
@@ -453,4 +475,7 @@ benchmark](notebooks/archive/mst_scaling_benchmark.ipynb).
 
 Python helper modules used by the notebooks are in [notebooks/src](notebooks/src/).
 For the full method description and equations, see the
-[IMSTE whitepaper](docs/whitepaper.md).
+[IMSTE whitepaper](docs/whitepaper.md). For a detailed walkthrough of
+rank-only multilevel initialization, see the
+[multilevel initialization guide](docs/multilevel-initialization.md).
+The package is distributed under the [MIT License](LICENSE).

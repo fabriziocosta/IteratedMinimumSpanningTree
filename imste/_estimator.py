@@ -404,7 +404,8 @@ class IteratedMinimumSpanningTreeEmbedder(
             except ImportError:
                 if self.device != "auto":
                     raise RuntimeError(
-                        f"device={self.device!r} requires PyTorch with a GPU backend."
+                        f"device={self.device!r} requires PyTorch with a GPU backend. "
+                        "Install it with `python -m pip install 'imste[gpu]'`."
                     )
             else:
                 mps_backend = getattr(torch.backends, "mps", None)

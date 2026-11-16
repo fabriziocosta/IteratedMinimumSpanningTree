@@ -4,7 +4,7 @@
 
 Multilevel initialization builds a starting layout by working from a small graph up to the full IMSTE graph. It uses the fitted graph's vertices, edges, and ranks. It does not use the input feature distances again during coarsening.
 
-The feature is optional. With the default `multilevel_init=False`, initialization continues to use the existing PCA or seeded random path. If you provide `init_coordinates`, those coordinates always take precedence and multilevel initialization is skipped.
+The feature is optional. With the default `multilevel_init=True`, the estimator builds a starting layout through rank-only coarsening. If you provide `init_coordinates`, those coordinates always take precedence and multilevel initialization is skipped.
 
 When multilevel initialization is enabled, `pca_init=True` (the default) initializes the coarsest graph by running PCA on the mean feature vector for each coarsest group. This use of features affects starting coordinates only: graph coarsening still depends on edge ranks, not feature distances. Set `pca_init=False` to use a seeded random start on the coarsest graph.
 
@@ -33,7 +33,7 @@ flowchart TD
 
 | Setting | Default | Purpose |
 | --- | ---: | --- |
-| `multilevel_init` | `False` | Enable the multilevel starting layout |
+| `multilevel_init` | `True` | Enable the multilevel starting layout |
 | `multilevel_reduction_ratio` | `32` | Target roughly one group for every thirty-two current vertices per level |
 | `multilevel_base_size` | `512` | Stop coarsening when the graph has this many vertices or fewer |
 | `multilevel_epochs` | `1` | Refine the layout for this many epochs at each coarse or expanded level |
