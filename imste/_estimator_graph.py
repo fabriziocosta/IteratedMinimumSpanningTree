@@ -7,6 +7,7 @@ import time
 import numpy as np
 from scipy import sparse
 from scipy.sparse import csr_matrix, issparse
+from sklearn.base import clone
 from sklearn.utils.validation import check_array, check_is_fitted
 
 from .mst import iterated_graph_edges
@@ -19,6 +20,7 @@ class _EstimatorGraphMethods:
         distance_graph: sparse.spmatrix,
         *,
         init_features: object | None = None,
+        init_coordinates: object | None = None,
     ) -> "IteratedMinimumSpanningTreeEmbedder":
         """Fit directly from a sparse graph whose stored values are distances.
 
@@ -33,12 +35,13 @@ class _EstimatorGraphMethods:
         ``init_features`` optionally supplies the sample-by-feature matrix used
         for standardized PCA initialization. ``init_coordinates`` can instead
         supply a complete initial embedding with one row per graph node and one
-        column per output dimension; it takes precedence over PCA. All rows
-        must follow the graph's order. Initialization affects coordinates only;
-        graph edges still determine the optimization objective. Without either
-        form of initialization, the seeded random start is used. The fitted
-        coordinates are available as ``embedding_``; feature-based ``transform``
-        is unavailable after ``fit_graph``.
+        column per output dimension; it takes precedence over PCA and the
+        estimator's ``init_coordinates`` parameter. All rows must follow the
+        graph's order. Initialization affects coordinates only; graph edges
+        still determine the optimization objective. Without either form of
+        initialization, the seeded random start is used. The fitted coordinates
+        are available as ``embedding_``; feature-based ``transform`` is
+        unavailable after ``fit_graph``.
         """
         fit_started = time.perf_counter()
         options = self._validated_fit_options()
@@ -74,6 +77,9 @@ class _EstimatorGraphMethods:
         if options["gravity_enabled"] and initialization_features is not None:
             if issparse(initialization_features):
                 raise ValueError("gravity refinement currently requires dense features.")
+        graph_initial_coordinates = (
+            self.init_coordinates if init_coordinates is None else init_coordinates
+        )
         self._activate_progress_reporting()
         graph_started = time.perf_counter()
         edges, tree_ranks = iterated_graph_edges(
@@ -97,7 +103,7 @@ class _EstimatorGraphMethods:
             resolved_device=options["resolved_device"],
             schedule_by_rank=True,
             initialization_features=initialization_features,
-            initial_coordinates=self.init_coordinates,
+            initial_coordinates=graph_initial_coordinates,
             **{
                 name: value
                 for name, value in options.items()
@@ -182,10 +188,38 @@ class _EstimatorGraphMethods:
         self,
         distance_graph: sparse.spmatrix,
         *,
+        X: object | None = None,
         init_features: object | None = None,
     ) -> np.ndarray:
-        """Fit from a sparse distance graph and return the embedding array."""
-        self.fit_graph(distance_graph, init_features=init_features)
+        """Fit from a sparse distance graph and return the embedding array.
+
+        If ``X`` is supplied, fit IMSTE to ``X`` first and use that embedding
+        to initialize optimization over ``distance_graph``. The graph remains
+        the objective for the final fit. ``init_features`` retains the direct
+        standardized-PCA initialization behavior of :meth:`fit_graph` and
+        cannot be combined with ``X``.
+        """
+        if X is None:
+            self.fit_graph(distance_graph, init_features=init_features)
+            return self.embedding_.copy()
+        if init_features is not None:
+            raise ValueError("Pass either X or init_features, not both.")
+        if (
+            not sparse.issparse(distance_graph)
+            or distance_graph.ndim != 2
+            or distance_graph.shape[0] != distance_graph.shape[1]
+        ):
+            raise ValueError("distance_graph must be a square SciPy sparse matrix.")
+        if distance_graph.shape[0] < 2:
+            raise ValueError("distance_graph must contain at least two samples.")
+        X_checked = check_array(
+            X, dtype=np.float64, ensure_2d=True, accept_sparse="csr"
+        )
+        if X_checked.shape[0] != distance_graph.shape[0]:
+            raise ValueError("X must have one row per distance_graph node.")
+        feature_estimator = clone(self)
+        initialization = feature_estimator.fit_transform(X_checked)
+        self.fit_graph(distance_graph, init_coordinates=initialization)
         return self.embedding_.copy()
 
     def transform(self, X: object) -> np.ndarray:

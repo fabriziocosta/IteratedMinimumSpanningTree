@@ -114,7 +114,10 @@ X = StandardScaler().fit_transform(digits.data)
 distance_matrix = cdist(X, X, metric="euclidean")
 distance_graph = csr_matrix(distance_matrix)
 
-graph_embedding = IteratedMinimumSpanningTreeEmbedder().fit_graph_transform(distance_graph)
+# First fit IMSTE to X, then use that layout to initialize the graph fit.
+graph_embedding = IteratedMinimumSpanningTreeEmbedder().fit_graph_transform(
+    distance_graph, X=X
+)
 
 plt.scatter(graph_embedding[:, 0], graph_embedding[:, 1], c=digits.target, cmap="tab10", s=10)
 ```
@@ -395,7 +398,9 @@ score into `[-1, 1]`. This preserves the relative scale between PCA axes. Set
 `pca_init_scaling="none"` to preserve raw PCA score magnitudes, or
 `pca_init=False` to use the seeded random initialization instead.
 `fit_graph()` uses the same PCA initialization when `init_features` is supplied;
-otherwise it uses random initialization. Pass `init_coordinates` with shape
+otherwise it uses random initialization. `fit_graph_transform(graph, X=X)` first
+fits IMSTE to `X` and uses that layout to initialize the graph fit. Pass
+`init_coordinates` with shape
 `(n_samples, n_components)` to start from explicit coordinates instead:
 
 ```python
