@@ -63,6 +63,31 @@ setting is an explicit workload choice, not a default: it samples more negative
 pairs and takes substantially longer than ratio 5. GPU utilization depends on
 the selected negative ratio, batch size, data, and other system activity.
 
+## Multilevel initialization defaults on M5 Pro
+
+The current defaults (`4 / 1024 / 10`) were compared with the fastest
+positive-epoch setting in the sweep (`32 / 512 / 1`) on the local CIFAR-10,
+MNIST, and arXiv workloads. Each dataset used one fixed FAMST graph for all
+settings: 3 trees, 15 starting neighbors, 200 final optimizer epochs, seed 42,
+and negative ratio 1. CIFAR used `device="auto"` (CPU); MNIST and arXiv used
+MPS. MNIST used 60,000 stratified, standardized rows. CIFAR used 50,000 cached
+768-feature image vectors. arXiv used a deterministic 200,000-row sample from
+the 3.2-million-row, 384-feature matrix. Each timing is the median of two runs;
+graph construction is excluded. Trustworthiness@10 was calculated on the same
+2,000 sampled rows for each setting.
+
+| Dataset | Defaults: init / fit / trustworthiness | `32 / 512 / 1`: init / fit / trustworthiness |
+| --- | ---: | ---: |
+| CIFAR-10 | 1.144 s / 2.631 s / 0.94854 | 0.986 s / 2.490 s / 0.95137 |
+| MNIST | 1.297 s / 2.268 s / 0.80199 | 1.037 s / 2.005 s / 0.82874 |
+| arXiv | 4.729 s / 7.950 s / 0.88130 | 3.626 s / 6.829 s / 0.87918 |
+
+The new values were the fastest positive-epoch combination tested on all three
+datasets. They shorten multilevel initialization by 14–23% and the measured
+IMSTE fit by 5–14%. Trustworthiness increased on CIFAR-10 and MNIST, and fell
+by 0.0021 on the arXiv sample. One epoch keeps a refinement pass active at
+each multilevel stage while minimizing its time cost.
+
 Reproduce with:
 
 ```sh

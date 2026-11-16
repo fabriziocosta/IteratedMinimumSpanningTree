@@ -10,37 +10,6 @@ from typing import Any
 import numpy as np
 
 
-def apply_local_mexican_hat_force(
-    embedding: object,
-    point_mass: object,
-    *,
-    attraction_strength: float = 0.5,
-    near_repulsion_strength: float = 2.5,
-    attraction_range: float = 1.0,
-    repulsion_range: float = 0.5,
-    neighbors: int = 8,
-    step_size: float = 0.05,
-    iterations: int = 3,
-    mass_power: float = 0.5,
-    n_jobs: int = -1,
-) -> np.ndarray:
-    """Backward-compatible wrapper for the modular IMSTE gravity force."""
-    from imste._gravity import apply_local_mexican_hat_force as apply_force
-
-    return apply_force(
-        embedding,
-        point_mass,
-        attraction_strength=attraction_strength,
-        near_repulsion_strength=near_repulsion_strength,
-        attraction_range=attraction_range,
-        repulsion_range=repulsion_range,
-        neighbors=neighbors,
-        step_size=step_size,
-        iterations=iterations,
-        mass_power=mass_power,
-        n_jobs=n_jobs,
-    )
-
 def _sampled_silhouette_score(
     coordinates: np.ndarray,
     labels: np.ndarray,
@@ -145,14 +114,10 @@ def fit_density_gravity_layout(
         }
     if settings.get("metric", "euclidean") != "euclidean":
         raise ValueError("The gravity phase currently requires metric='euclidean'.")
-    mode = settings.get("mode", "density_core")
-    if mode not in {"density_core", "mexican_hat"}:
-        raise ValueError("Gravity mode must be 'density_core' or 'mexican_hat'.")
-
     cache_path = Path(cache_dir)
     cache_path.mkdir(parents=True, exist_ok=True)
     cache_payload = {
-        "algorithm_version": "local-mexican-hat-v4",
+        "algorithm_version": "density-core-v1",
         "projection_id": str(projection_id),
         "dataset_id": str(dataset_id),
         **settings,
@@ -307,38 +272,15 @@ def fit_density_gravity_layout(
     centers /= core_mass[:, None]
 
     layout_started = time.perf_counter()
-    if mode == "density_core":
-        region_strength = np.clip(
-            float(settings["strength"])
-            * (region_mass / np.median(region_mass)) ** float(settings["mass_power"]),
-            0.0,
-            0.9,
-        )
-        result = coordinates + region_strength[membership, None] * (
-            centers[membership] - coordinates
-        )
-    else:
-        region_strength = np.clip(
-            float(settings["strength"])
-            * (region_mass / np.median(region_mass)) ** float(settings["mass_power"]),
-            0.0,
-            0.9,
-        )
-        result = coordinates + region_strength[membership, None] * (
-            centers[membership] - coordinates
-        )
-        result = apply_local_mexican_hat_force(
-            result,
-            node_mass,
-            attraction_strength=float(settings["attraction_strength"]),
-            near_repulsion_strength=float(settings["near_repulsion_strength"]),
-            attraction_range=float(settings["attraction_range"]),
-            repulsion_range=float(settings["repulsion_range"]),
-            neighbors=int(settings["force_neighbors"]),
-            step_size=float(settings["step_size"]),
-            iterations=int(settings["iterations"]),
-            mass_power=float(settings["mass_power"]),
-        )
+    region_strength = np.clip(
+        float(settings["strength"])
+        * (region_mass / np.median(region_mass)) ** float(settings["mass_power"]),
+        0.0,
+        0.9,
+    )
+    result = coordinates + region_strength[membership, None] * (
+        centers[membership] - coordinates
+    )
     result -= result.mean(axis=0)
     result = result.astype(np.float32)
     if not np.isfinite(result).all():
@@ -548,16 +490,15 @@ def prepare_arxiv_projection_cache(
     ]
     projection_settings = {
         # Bump when sequential gravity / mean-shift semantics change.
-        "cache_schema": 4,
+        "cache_schema": 5,
         "data_id": dataset_id,
         "metric": metric,
         "umap": umap_key,
         "gravity": {
             key: imste_settings.get(key, default)
             for key, default in {
-                "gravity_mode": "mexican_hat",
                 "gravity_neighbors": 15,
-                "gravity_resolution": 0.8,
+                "gravity_resolution": 1.0,
                 "gravity_strength": 0.2,
             }.items()
         },

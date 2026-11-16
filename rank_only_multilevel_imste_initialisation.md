@@ -34,9 +34,9 @@ flowchart TD
 | Setting | Default | Purpose |
 | --- | ---: | --- |
 | `multilevel_init` | `False` | Enable the multilevel starting layout |
-| `multilevel_reduction_ratio` | `4` | Target roughly one group for every four current vertices per level |
-| `multilevel_base_size` | `1024` | Stop coarsening when the graph has this many vertices or fewer |
-| `multilevel_epochs` | `10` | Refine the layout for this many epochs at each coarse or expanded level |
+| `multilevel_reduction_ratio` | `32` | Target roughly one group for every thirty-two current vertices per level |
+| `multilevel_base_size` | `512` | Stop coarsening when the graph has this many vertices or fewer |
+| `multilevel_epochs` | `1` | Refine the layout for this many epochs at each coarse or expanded level |
 
 The final optimization still uses the estimator's usual `n_epochs`, original ranked graph, and rank schedule. Multilevel epochs are additional work that prepares its initial coordinates.
 
@@ -175,9 +175,9 @@ from imste import IteratedMinimumSpanningTreeEmbedder
 mapper = IteratedMinimumSpanningTreeEmbedder(
     n_msts=4,
     multilevel_init=True,
-    multilevel_reduction_ratio=4,
-    multilevel_base_size=1024,
-    multilevel_epochs=10,
+    multilevel_reduction_ratio=32,
+    multilevel_base_size=512,
+    multilevel_epochs=1,
     n_epochs=400,
     random_state=42,
 )

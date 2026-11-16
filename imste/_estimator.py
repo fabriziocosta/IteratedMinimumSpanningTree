@@ -310,11 +310,11 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
         When ``pca_init=True`` and features are available, initialize the
         coarsest graph from PCA of its pooled group features; otherwise use a
         seeded random start at the coarsest level.
-    multilevel_reduction_ratio : int, default=4
+    multilevel_reduction_ratio : int, default=32
         Approximate reduction factor for each coarsening level.
-    multilevel_base_size : int, default=1024
+    multilevel_base_size : int, default=512
         Stop coarsening once a level has at most this many nodes.
-    multilevel_epochs : int, default=10
+    multilevel_epochs : int, default=1
         Refinement epochs at each coarsened level.
     n_epochs : int, default=200
         Number of optimization epochs.
@@ -361,36 +361,18 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
         rank-one attractive edges alongside the ranked spanning trees. This
         makes local neighborhoods denser and is available for Euclidean FAMST
         fits.
-    gravity_mode : {'density_core', 'mexican_hat', None}, default='density_core'
-        Apply a density-aware second-phase layout after the IMSTE optimization.
-        ``None`` disables gravity. Gravity currently requires dense Euclidean
-        features and at least two embedding dimensions; it refines the first two.
+    gravity_strength : float, default=0.2
+        Attraction toward density-weighted region cores after IMSTE. Set to zero
+        to disable gravity. Gravity requires dense Euclidean features and at
+        least two embedding dimensions; it refines the first two.
     gravity_neighbors : int, default=15
         Feature-space neighbors used to build gravity regions.
     gravity_resolution : float, default=1.0
         Leiden resolution used to identify gravity regions.
-    gravity_strength : float, default=0.2
-        Base attraction from each point toward its region's density core when
-        gravity is enabled. Mexican-hat mode also applies local attraction and
-        repulsion after this regional pull.
     gravity_core_quantile : float, default=0.95
         Within-region density quantile defining the core points.
     gravity_mass_power : float, default=0.5
         Exponent controlling how region and point density affect gravity.
-    gravity_attraction_strength : float, default=0.5
-        Attraction strength of the local Mexican-hat force.
-    gravity_near_repulsion_strength : float, default=2.5
-        Repulsion strength between close embedded neighbors.
-    gravity_force_neighbors : int, default=8
-        Number of embedded neighbors used by the local force.
-    gravity_attraction_range : float, default=1.0
-        Attraction radius relative to local embedded neighbor distance.
-    gravity_repulsion_range : float, default=0.5
-        Repulsion radius relative to local embedded neighbor distance.
-    gravity_step_size : float, default=0.05
-        Maximum local force step as a fraction of each point's local scale.
-    gravity_iterations : int, default=3
-        Number of local-force refinement iterations.
     gravity_pack_regions : bool, default=False
         After gravity, translate each Leiden region as a rigid group onto a
         compact ring. This preserves within-region distances but changes
@@ -457,25 +439,17 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
         pca_init_scaling: str = "global",
         init_coordinates: object | None = None,
         multilevel_init: bool = True,
-        multilevel_reduction_ratio: int = 4,
-        multilevel_base_size: int = 1024,
-        multilevel_epochs: int = 10,
+        multilevel_reduction_ratio: int = 32,
+        multilevel_base_size: int = 512,
+        multilevel_epochs: int = 1,
         metric: str = "euclidean",
         mst_neighbor_backend: str = "auto",
         include_knn_attraction: bool = False,
-        gravity_mode: str | None = "density_core",
         gravity_neighbors: int = 15,
         gravity_resolution: float = 1.0,
         gravity_strength: float = 0.2,
         gravity_core_quantile: float = 0.95,
         gravity_mass_power: float = 0.5,
-        gravity_attraction_strength: float = 0.5,
-        gravity_near_repulsion_strength: float = 2.5,
-        gravity_force_neighbors: int = 8,
-        gravity_attraction_range: float = 1.0,
-        gravity_repulsion_range: float = 0.5,
-        gravity_step_size: float = 0.05,
-        gravity_iterations: int = 3,
         gravity_pack_regions: bool = False,
         gravity_pack_radius_quantile: float = 0.9,
         gravity_pack_gap_fraction: float = 0.25,
@@ -517,19 +491,11 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
         self.metric = metric
         self.mst_neighbor_backend = mst_neighbor_backend
         self.include_knn_attraction = include_knn_attraction
-        self.gravity_mode = gravity_mode
         self.gravity_neighbors = gravity_neighbors
         self.gravity_resolution = gravity_resolution
         self.gravity_strength = gravity_strength
         self.gravity_core_quantile = gravity_core_quantile
         self.gravity_mass_power = gravity_mass_power
-        self.gravity_attraction_strength = gravity_attraction_strength
-        self.gravity_near_repulsion_strength = gravity_near_repulsion_strength
-        self.gravity_force_neighbors = gravity_force_neighbors
-        self.gravity_attraction_range = gravity_attraction_range
-        self.gravity_repulsion_range = gravity_repulsion_range
-        self.gravity_step_size = gravity_step_size
-        self.gravity_iterations = gravity_iterations
         self.gravity_pack_regions = gravity_pack_regions
         self.gravity_pack_radius_quantile = gravity_pack_radius_quantile
         self.gravity_pack_gap_fraction = gravity_pack_gap_fraction
@@ -597,26 +563,16 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
             raise ValueError("include_knn_attraction requires mst_method='famst'.")
         if self.include_knn_attraction and self.metric != "euclidean":
             raise ValueError("include_knn_attraction requires metric='euclidean'.")
-        if self.gravity_mode not in {None, "density_core", "mexican_hat"}:
-            raise ValueError(
-                "gravity_mode must be 'density_core', 'mexican_hat', or None."
-            )
         gravity_strength = _finite_nonnegative(
             "gravity_strength", self.gravity_strength
         )
-        gravity_enabled = self.gravity_mode is not None and gravity_strength > 0.0
+        gravity_enabled = gravity_strength > 0.0
         if gravity_enabled and self.metric != "euclidean":
             raise ValueError("gravity refinement currently requires metric='euclidean'.")
         if gravity_enabled and n_components < 2:
             raise ValueError("gravity refinement requires n_components >= 2.")
         gravity_neighbors = _positive_integer(
             "gravity_neighbors", self.gravity_neighbors
-        )
-        gravity_force_neighbors = _positive_integer(
-            "gravity_force_neighbors", self.gravity_force_neighbors
-        )
-        gravity_iterations = _positive_integer(
-            "gravity_iterations", self.gravity_iterations, allow_zero=True
         )
         gravity_resolution = _finite_nonnegative(
             "gravity_resolution", self.gravity_resolution, strictly_positive=True
@@ -628,27 +584,6 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
             raise ValueError("gravity_core_quantile must be in [0, 1].")
         gravity_mass_power = _finite_nonnegative(
             "gravity_mass_power", self.gravity_mass_power
-        )
-        gravity_attraction_strength = _finite_nonnegative(
-            "gravity_attraction_strength", self.gravity_attraction_strength
-        )
-        gravity_near_repulsion_strength = _finite_nonnegative(
-            "gravity_near_repulsion_strength", self.gravity_near_repulsion_strength
-        )
-        gravity_attraction_range = _finite_nonnegative(
-            "gravity_attraction_range", self.gravity_attraction_range,
-            strictly_positive=True,
-        )
-        gravity_repulsion_range = _finite_nonnegative(
-            "gravity_repulsion_range", self.gravity_repulsion_range,
-            strictly_positive=True,
-        )
-        if gravity_attraction_range <= gravity_repulsion_range:
-            raise ValueError(
-                "gravity_attraction_range must exceed gravity_repulsion_range."
-            )
-        gravity_step_size = _finite_nonnegative(
-            "gravity_step_size", self.gravity_step_size
         )
         if not isinstance(self.gravity_pack_regions, (bool, np.bool_)):
             raise ValueError("gravity_pack_regions must be a boolean.")
@@ -734,20 +669,12 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
             "pca_init_scaling": self.pca_init_scaling,
             "resolved_device": resolved_device,
             "metric": self.metric,
-            "gravity_mode": self.gravity_mode,
             "gravity_enabled": gravity_enabled,
             "gravity_neighbors": gravity_neighbors,
             "gravity_resolution": gravity_resolution,
             "gravity_strength": gravity_strength,
             "gravity_core_quantile": gravity_core_quantile,
             "gravity_mass_power": gravity_mass_power,
-            "gravity_attraction_strength": gravity_attraction_strength,
-            "gravity_near_repulsion_strength": gravity_near_repulsion_strength,
-            "gravity_force_neighbors": gravity_force_neighbors,
-            "gravity_attraction_range": gravity_attraction_range,
-            "gravity_repulsion_range": gravity_repulsion_range,
-            "gravity_step_size": gravity_step_size,
-            "gravity_iterations": gravity_iterations,
             "gravity_pack_regions": bool(self.gravity_pack_regions),
             "gravity_pack_radius_quantile": gravity_pack_radius_quantile,
             "gravity_pack_gap_fraction": gravity_pack_gap_fraction,
@@ -1209,9 +1136,7 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
         )
 
         refinements_need_graph = options["gravity_enabled"]
-        feature_graph_width = max(
-            options["gravity_neighbors"], options["gravity_force_neighbors"]
-        )
+        feature_graph_width = options["gravity_neighbors"]
         reuse_graph_for_refinements = (
             self.mst_method == "famst"
             and options["metric"] == "euclidean"
@@ -1279,12 +1204,9 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
                 if name not in {
                     "n_components", "n_msts", "resolved_device",
                     "mst_neighbor_backend", "include_knn_attraction",
-                    "gravity_mode", "gravity_neighbors", "gravity_resolution",
+                    "gravity_neighbors", "gravity_resolution",
                     "gravity_strength", "gravity_core_quantile",
-                    "gravity_mass_power", "gravity_attraction_strength",
-                    "gravity_near_repulsion_strength", "gravity_force_neighbors",
-                    "gravity_attraction_range", "gravity_repulsion_range",
-                    "gravity_step_size", "gravity_iterations",
+                    "gravity_mass_power",
                     "gravity_pack_regions", "gravity_pack_radius_quantile",
                     "gravity_pack_gap_fraction",
                     "gravity_enabled", "mean_shift_neighbors",
@@ -1317,22 +1239,12 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
             gravity_embedding, gravity_diagnostics = density_gravity_layout(
                 X_checked,
                 self.embedding_before_gravity_[:, :2],
-                mode=options["gravity_mode"],
                 neighbors=min(options["gravity_neighbors"], n_samples - 1),
                 resolution=options["gravity_resolution"],
                 random_state=42 if self.random_state is None else self.random_state,
                 core_quantile=options["gravity_core_quantile"],
                 strength=options["gravity_strength"],
                 mass_power=options["gravity_mass_power"],
-                attraction_strength=options["gravity_attraction_strength"],
-                near_repulsion_strength=options[
-                    "gravity_near_repulsion_strength"
-                ],
-                force_neighbors=min(options["gravity_force_neighbors"], n_samples - 1),
-                attraction_range=options["gravity_attraction_range"],
-                repulsion_range=options["gravity_repulsion_range"],
-                step_size=options["gravity_step_size"],
-                iterations=options["gravity_iterations"],
                 pack_regions=options["gravity_pack_regions"],
                 pack_radius_quantile=options["gravity_pack_radius_quantile"],
                 pack_gap_fraction=options["gravity_pack_gap_fraction"],
@@ -1501,10 +1413,7 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
         self.embedding_before_gravity_ = self.embedding_.copy()
         self.imste_fit_time_ = self.fit_time_
         n_samples = distance_graph.shape[0]
-        feature_graph_width = (
-            max(options["gravity_neighbors"], options["gravity_force_neighbors"])
-            if options["gravity_enabled"] else 1
-        )
+        feature_graph_width = options["gravity_neighbors"] if options["gravity_enabled"] else 1
         feature_neighbor_graph = None
         refinements_need_graph = options["gravity_enabled"]
         if refinements_need_graph and initialization_features is not None:
@@ -1524,20 +1433,12 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
             gravity_embedding, diagnostics = density_gravity_layout(
                 initialization_features,
                 self.embedding_before_gravity_[:, :2],
-                mode=options["gravity_mode"],
                 neighbors=min(options["gravity_neighbors"], n_samples - 1),
                 resolution=options["gravity_resolution"],
                 random_state=42 if self.random_state is None else self.random_state,
                 core_quantile=options["gravity_core_quantile"],
                 strength=options["gravity_strength"],
                 mass_power=options["gravity_mass_power"],
-                attraction_strength=options["gravity_attraction_strength"],
-                near_repulsion_strength=options["gravity_near_repulsion_strength"],
-                force_neighbors=min(options["gravity_force_neighbors"], n_samples - 1),
-                attraction_range=options["gravity_attraction_range"],
-                repulsion_range=options["gravity_repulsion_range"],
-                step_size=options["gravity_step_size"],
-                iterations=options["gravity_iterations"],
                 pack_regions=options["gravity_pack_regions"],
                 pack_radius_quantile=options["gravity_pack_radius_quantile"],
                 pack_gap_fraction=options["gravity_pack_gap_fraction"],

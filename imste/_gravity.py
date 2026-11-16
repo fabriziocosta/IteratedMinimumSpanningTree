@@ -7,87 +7,6 @@ import time
 import numpy as np
 
 
-def apply_local_mexican_hat_force(
-    embedding: object,
-    point_mass: object,
-    *,
-    attraction_strength: float = 0.5,
-    near_repulsion_strength: float = 2.5,
-    attraction_range: float = 1.0,
-    repulsion_range: float = 0.5,
-    neighbors: int = 8,
-    step_size: float = 0.05,
-    iterations: int = 3,
-    mass_power: float = 0.5,
-    n_jobs: int = -1,
-) -> np.ndarray:
-    """Apply locally scaled Mexican-hat forces to 2D coordinates."""
-    from sklearn.neighbors import NearestNeighbors
-
-    coordinates = np.asarray(embedding, dtype=np.float64).copy()
-    point_mass = np.asarray(point_mass, dtype=np.float64).reshape(-1)
-    if coordinates.ndim != 2 or coordinates.shape[1] != 2 or len(coordinates) < 3:
-        raise ValueError("embedding must have shape (n_samples >= 3, 2).")
-    if point_mass.shape != (len(coordinates),):
-        raise ValueError("point_mass must contain one value per embedded point.")
-    if not np.isfinite(coordinates).all():
-        raise ValueError("embedding must contain only finite coordinates.")
-    if not np.isfinite(point_mass).all() or np.any(point_mass <= 0):
-        raise ValueError("point_mass values must be finite and positive.")
-    if not 1 <= int(neighbors) < len(coordinates):
-        raise ValueError("neighbors must be in [1, n_samples).")
-    if int(iterations) < 0:
-        raise ValueError("iterations must be nonnegative.")
-    if repulsion_range <= 0 or attraction_range <= repulsion_range:
-        raise ValueError("attraction_range must exceed positive repulsion_range.")
-
-    relative_mass = np.clip(point_mass / np.median(point_mass), 0.1, 10.0) ** mass_power
-    for iteration in range(int(iterations)):
-        index = NearestNeighbors(
-            n_neighbors=int(neighbors) + 1,
-            algorithm="kd_tree",
-            n_jobs=n_jobs,
-        ).fit(coordinates)
-        distances, indices = index.kneighbors(coordinates, return_distance=True)
-        keep = indices != np.arange(len(coordinates), dtype=np.int64)[:, None]
-        distances = distances[keep].reshape(len(coordinates), int(neighbors))
-        indices = indices[keep].reshape(len(coordinates), int(neighbors))
-        local_scale = np.maximum(distances[:, -1], np.finfo(np.float64).eps)
-        pair_scale = np.sqrt(local_scale[:, None] * local_scale[indices])
-        sigma_attract = np.maximum(attraction_range * pair_scale, 1e-12)
-        sigma_repel = np.maximum(repulsion_range * pair_scale, 1e-12)
-        attraction = attraction_strength * np.exp(-0.5 * (distances / sigma_attract) ** 2)
-        repulsion = near_repulsion_strength * np.exp(-0.5 * (distances / sigma_repel) ** 2)
-        interaction = attraction - repulsion
-        direction = (coordinates[indices] - coordinates[:, None, :]) / np.maximum(
-            distances[:, :, None], 1e-12
-        )
-        coincident = distances <= 1e-12
-        if np.any(coincident):
-            source_rows = np.broadcast_to(
-                np.arange(len(coordinates), dtype=np.int64)[:, None], indices.shape
-            )
-            lower = np.minimum(source_rows, indices)
-            upper = np.maximum(source_rows, indices)
-            pair_code = (lower * 73_856_093) ^ (upper * 19_349_663) ^ iteration
-            angle = (pair_code % 1_000_003) * (2.0 * np.pi / 1_000_003)
-            pair_direction = np.stack((np.cos(angle), np.sin(angle)), axis=2)
-            pair_direction *= np.where(source_rows < indices, 1.0, -1.0)[:, :, None]
-            direction[coincident] = pair_direction[coincident]
-        neighbor_mass = relative_mass[indices]
-        weighted_force = interaction[:, :, None] * direction * neighbor_mass[:, :, None]
-        force = weighted_force.sum(axis=1) / np.maximum(
-            (np.abs(interaction) * neighbor_mass).sum(axis=1, keepdims=True), 1e-12
-        )
-        movement = step_size * local_scale[:, None] * force
-        movement_norm = np.linalg.norm(movement, axis=1)
-        max_movement = step_size * local_scale
-        shrink = np.minimum(1.0, max_movement / np.maximum(movement_norm, 1e-12))
-        coordinates += movement * shrink[:, None]
-        coordinates -= coordinates.mean(axis=0)
-    return coordinates.astype(np.float32)
-
-
 def pack_region_centers_on_ring(
     embedding: object,
     membership: object,
@@ -197,20 +116,12 @@ def density_gravity_layout(
     features: object,
     embedding: object,
     *,
-    mode: str = "mexican_hat",
     neighbors: int = 15,
-    resolution: float = 0.8,
+    resolution: float = 1.0,
     random_state: int = 42,
     core_quantile: float = 0.95,
     strength: float = 0.2,
     mass_power: float = 0.5,
-    attraction_strength: float = 0.5,
-    near_repulsion_strength: float = 2.5,
-    force_neighbors: int = 8,
-    attraction_range: float = 1.0,
-    repulsion_range: float = 0.5,
-    step_size: float = 0.05,
-    iterations: int = 3,
     pack_regions: bool = False,
     pack_radius_quantile: float = 0.9,
     pack_gap_fraction: float = 0.25,
@@ -220,16 +131,12 @@ def density_gravity_layout(
     """Build feature-space density regions and refine an IMSTE layout.
 
     A compatible Euclidean feature-neighbor graph is reused when supplied;
-    otherwise RINND builds one. Leiden finds weighted density regions. Both
-    modes pull points toward density-weighted region cores. ``density_core``
-    applies only that regional pull; ``mexican_hat`` follows it with local
-    attraction/repulsion to preserve within-region structure. No labels or
-    notebook state are used.
+    otherwise RINND builds one. Leiden finds weighted density regions, then
+    points move toward density-weighted region cores. No labels or notebook
+    state are used.
     """
     from scipy.sparse import issparse
 
-    if mode not in {"density_core", "mexican_hat"}:
-        raise ValueError("mode must be 'density_core' or 'mexican_hat'.")
     if not isinstance(pack_regions, (bool, np.bool_)):
         raise ValueError("pack_regions must be a boolean.")
     if issparse(features):
@@ -358,26 +265,11 @@ def density_gravity_layout(
         0.0,
         0.9,
     )
-    # The feature-space regions must affect both modes. Mexican-hat then adds
-    # local repulsion/attraction to retain structure around each pulled core.
     result = coordinates + region_strength[membership, None] * (
         centers[membership] - coordinates
     )
 
     force_started = time.perf_counter()
-    if mode == "mexican_hat":
-        result = apply_local_mexican_hat_force(
-            result,
-            point_mass,
-            attraction_strength=attraction_strength,
-            near_repulsion_strength=near_repulsion_strength,
-            attraction_range=attraction_range,
-            repulsion_range=repulsion_range,
-            neighbors=force_neighbors,
-            step_size=step_size,
-            iterations=iterations,
-            mass_power=mass_power,
-        )
     if pack_regions:
         result = pack_region_centers_on_ring(
             result,

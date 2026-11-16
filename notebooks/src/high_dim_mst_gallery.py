@@ -47,6 +47,13 @@ def _stratified_sample(
 
 
 def _load_openml(name: str) -> tuple[np.ndarray, np.ndarray]:
+    return _load_cached_image_arrays(
+        name,
+        lambda: _download_openml_arrays(name),
+    )
+
+
+def _download_openml_arrays(name: str) -> tuple[np.ndarray, np.ndarray]:
     dataset = fetch_openml(
         name,
         version=1,
@@ -58,8 +65,36 @@ def _load_openml(name: str) -> tuple[np.ndarray, np.ndarray]:
     return np.asarray(dataset.data), labels
 
 
+def _load_cached_image_arrays(
+    name: str,
+    loader,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Load one image dataset from the project cache, downloading it once."""
+    cache_dir = _project_root / "data" / "mnist" / "cache"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    cache_path = cache_dir / f"{name.lower().replace('-', '_')}_v1.npz"
+    if cache_path.is_file():
+        with np.load(cache_path, allow_pickle=False) as saved:
+            return np.asarray(saved["features"]), np.asarray(saved["labels"])
+
+    features, labels = loader()
+    features = np.asarray(features)
+    labels = np.asarray(labels)
+    if features.ndim != 2 or len(features) != len(labels):
+        raise ValueError(f"Unexpected cached dataset shapes: {features.shape}, {labels.shape}")
+    temporary_path = cache_path.with_suffix(".tmp.npz")
+    np.savez_compressed(temporary_path, features=features, labels=labels)
+    temporary_path.replace(cache_path)
+    print(f"Cached {name} at {cache_path}", flush=True)
+    return features, labels
+
+
 def _load_kmnist() -> tuple[np.ndarray, np.ndarray]:
-    """Download Kuzushiji-MNIST archives fresh without writing a local cache."""
+    """Load Kuzushiji-MNIST from the project cache, downloading it once."""
+    return _load_cached_image_arrays("Kuzushiji-MNIST", _download_kmnist_arrays)
+
+
+def _download_kmnist_arrays() -> tuple[np.ndarray, np.ndarray]:
     base_url = "https://codh.rois.ac.jp/kmnist/dataset/kmnist"
 
     def load_archive(filename: str) -> np.ndarray:
@@ -190,12 +225,11 @@ def run_high_dim_mst_gallery(
     verbose: bool = False,
     plot_embeddings: bool = True,
     multilevel_init: bool = True,
-    multilevel_reduction_ratio: int = 4,
-    multilevel_base_size: int = 1024,
-    multilevel_epochs: int = 10,
-    gravity_mode: str | None = "mexican_hat",
+    multilevel_reduction_ratio: int = 32,
+    multilevel_base_size: int = 512,
+    multilevel_epochs: int = 1,
     gravity_neighbors: int = 15,
-    gravity_resolution: float = 0.8,
+    gravity_resolution: float = 1.0,
     gravity_strength: float = 0.2,
     mean_shift_neighbors: int = 50,
     mean_shift_bandwidth_factor: float = 1.0,
@@ -215,8 +249,9 @@ def run_high_dim_mst_gallery(
     cosine graph distances; cosine uses exact Prim construction. Multilevel initialization is
     enabled by default for this gallery and can be configured with the
     ``multilevel_*`` options.
-    Gravity runs before optional mean shift. Set ``gravity_mode=None`` and
-    ``mean_shift_iterations=0`` to return the base IMSTE layout only.
+    Density-core gravity runs before optional mean shift. Set
+    ``gravity_strength=0`` and ``mean_shift_iterations=0`` to return the base
+    IMSTE layout only.
     """
     if max_samples < 10:
         raise ValueError("max_samples must be at least 10.")
@@ -283,7 +318,6 @@ def run_high_dim_mst_gallery(
                         multilevel_reduction_ratio=multilevel_reduction_ratio,
                         multilevel_base_size=multilevel_base_size,
                         multilevel_epochs=multilevel_epochs,
-                        gravity_mode=gravity_mode,
                         gravity_neighbors=gravity_neighbors,
                         gravity_resolution=gravity_resolution,
                         gravity_strength=gravity_strength,
@@ -340,7 +374,6 @@ def run_high_dim_mst_gallery(
                 "multilevel_reduction_ratio": multilevel_reduction_ratio,
                 "multilevel_base_size": multilevel_base_size,
                 "multilevel_epochs": multilevel_epochs,
-                "gravity_mode": gravity_mode,
                 "gravity_neighbors": estimator.gravity_neighbors,
                 "gravity_resolution": estimator.gravity_resolution,
                 "gravity_strength": estimator.gravity_strength,

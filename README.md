@@ -294,9 +294,9 @@ error. The per-edge maximum and component pairs remain available for review.
 | `pca_init` | `True` | Initialize `fit(X)` with PCA on feature-wise standardized inputs; extra PCA dimensions are zero-filled |
 | `pca_init_scaling` | `"global"` | Apply one uniform scale to fit all PCA coordinates into `[-1, 1]`, or use `"none"` to preserve raw magnitudes |
 | `multilevel_init` | `False` | Opt into rank-only graph coarsening and coarse-to-fine initialization |
-| `multilevel_reduction_ratio` | `4` | Approximate number of nodes represented by each node per coarsening level |
-| `multilevel_base_size` | `1024` | Stop coarsening at or below this graph size |
-| `multilevel_epochs` | `10` | Refinement epochs at each coarsened graph level |
+| `multilevel_reduction_ratio` | `32` | Approximate number of nodes represented by each node per coarsening level |
+| `multilevel_base_size` | `512` | Stop coarsening at or below this graph size |
+| `multilevel_epochs` | `1` | Refinement epochs at each coarsened graph level |
 | `n_epochs` | `200` | Coordinate-optimization epochs |
 | `batch_size` | `32768` | Maximum active edges per MPS update batch; ignored by CPU optimizer |
 | `learning_rate` | `0.05` | Coordinate optimizer learning rate |
@@ -312,19 +312,11 @@ error. The per-edge maximum and component pairs remain available for review.
 | `mst_neighbor_backend` | `"auto"` | `"auto"`, `"rinnd"`, `"pynndescent"`, or `"mps_exact"` FAMST neighbor search |
 | `mst_neighbors` | `15` | Initial candidate neighbors for FAMST |
 | `include_knn_attraction` | `False` | Also attract along FAMST candidate-neighbor edges in Euclidean `fit(X)` |
-| `gravity_mode` | `"mexican_hat"` | Optional density-aware second phase; set to `None` to disable |
 | `gravity_neighbors` | `15` | Feature-space neighbors for the RINND/Leiden region graph |
-| `gravity_resolution` | `0.8` | Leiden partition resolution |
-| `gravity_strength` | `0.2` | Attraction toward each density-weighted region core |
+| `gravity_resolution` | `1.0` | Leiden partition resolution |
+| `gravity_strength` | `0.2` | Attraction toward each density-weighted region core; set to `0` to disable gravity |
 | `gravity_core_quantile` | `0.95` | Within-region density quantile defining the core points |
 | `gravity_mass_power` | `0.5` | Exponent controlling point and region mass effects |
-| `gravity_attraction_strength` | `0.5` | Attraction strength for local Mexican-hat forces |
-| `gravity_near_repulsion_strength` | `2.5` | Repulsion strength for close embedded neighbors |
-| `gravity_force_neighbors` | `8` | Embedded neighbors used by the local force |
-| `gravity_attraction_range` | `1.0` | Attraction radius relative to local embedded neighbor distance |
-| `gravity_repulsion_range` | `0.5` | Repulsion radius relative to local embedded neighbor distance |
-| `gravity_step_size` | `0.05` | Maximum force step as a fraction of local scale |
-| `gravity_iterations` | `3` | Local-force refinement iterations |
 | `gravity_pack_regions` | `False` | After gravity, translate Leiden regions onto a compact ring while preserving each region's internal shape |
 | `gravity_pack_radius_quantile` | `0.9` | Quantile used to estimate region radii for ring packing |
 | `gravity_pack_gap_fraction` | `0.25` | Gap between packed regions as a fraction of their median radius |
@@ -364,8 +356,9 @@ embedding = mapper.fit_transform(X)
 The coordinate rows must correspond to `X` in the same order. Explicit
 coordinates take precedence over `pca_init` and are used at their supplied scale.
 
-Gravity is an optional second phase for dense Euclidean inputs with at least
-two embedding dimensions. Its Leiden regions can be translated onto a compact
+Gravity uses the density-core method as an optional second phase for dense
+Euclidean inputs with at least two embedding dimensions. Its Leiden regions
+can be translated onto a compact
 ring with `gravity_pack_regions=True`. This rigid translation preserves
 within-region distances, but changes distances between regions; use it when a
 compact region view is more useful than preserving the fitted global layout.
