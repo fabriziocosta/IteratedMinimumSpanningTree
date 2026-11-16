@@ -77,11 +77,17 @@ def iterated_prim_edges(
         )
     if metric == "cosine":
         X = _cosine_safe_normalize(X)
-    distances = (
-        cdist(X, X, metric="euclidean")
-        if metric == "euclidean"
-        else pairwise_distances(X, metric=metric)
-    )
+        nonzero_rows = np.flatnonzero(np.any(X != 0.0, axis=1))
+        distances = np.ones((len(X), len(X)), dtype=np.float64)
+        if nonzero_rows.size:
+            nonzero_distances = cdist(
+                X[nonzero_rows], X[nonzero_rows], metric="cosine"
+            )
+            distances[np.ix_(nonzero_rows, nonzero_rows)] = nonzero_distances
+    elif metric == "euclidean":
+        distances = cdist(X, X, metric="euclidean")
+    else:
+        distances = pairwise_distances(X, metric=metric)
     if not np.isfinite(distances).all():
         raise ValueError("Pairwise distances overflowed; rescale X before fitting.")
     np.fill_diagonal(distances, 0.0)
@@ -112,6 +118,9 @@ def _iterated_sparse_prim_edges(
     def squared_distances_from(sample: int) -> np.ndarray:
         if metric == "euclidean":
             values = euclidean_distances(X[sample], X, squared=True).ravel()
+        elif metric == "cosine":
+            similarities = (X[sample] @ X.T).toarray().ravel()
+            values = np.clip(1.0 - similarities, 0.0, 2.0)
         else:
             values = pairwise_distances(X[sample], X, metric=metric).ravel()
         if not np.isfinite(values).all():

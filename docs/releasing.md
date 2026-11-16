@@ -19,13 +19,13 @@ The project is pre-1.0, so releases use `0.MINOR.PATCH`:
 
 ## First successful PyPI release
 
-The first package version to publish on PyPI is `0.1.1`. Before creating its
+The first package version to publish on PyPI is `0.2.1`. Before creating its
 GitHub Release:
 
 1. In the PyPI account, create a pending Trusted Publisher for project `imste`
    with owner `fabriziocosta`, repository `IteratedMinimumSpanningTree`,
    workflow file `publish.yml`, and GitHub environment `pypi`.
-2. Create and publish a GitHub Release tagged `v0.1.1`.
+2. Create and publish a GitHub Release tagged `v0.2.1`.
 
 The workflow runs tests, builds and checks both the wheel and source
 distribution, verifies the tag against `pyproject.toml`, then publishes the

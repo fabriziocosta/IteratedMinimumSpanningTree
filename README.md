@@ -54,8 +54,8 @@ MPS inputs, exact chunked search is also available. To use only the exact Prim
 builder, select `mst_method="prim"`.
 
 For an existing sparse graph whose stored values are distances, use
-`fit_graph()` instead of passing the matrix to `fit()` (which treats rows as
-feature vectors). Supply a square SciPy sparse matrix with finite,
+`fit_graph()` or `fit_graph_transform()` instead of passing the matrix to
+`fit()` (which treats rows as feature vectors). Supply a square SciPy sparse matrix with finite,
 non-negative values. Each stored off-diagonal entry is an edge; implicit zeros
 are absent edges, while explicitly stored zero-distance edges are retained.
 Edges are treated as undirected, and reciprocal entries use the smaller
@@ -65,8 +65,9 @@ increments their rank. The optimizer uses the usual inverse-rank attraction
 weights. Optionally pass `init_features` with one feature row per graph node to
 seed the coordinates from standardized PCA scores. These features affect only
 initialization; the supplied graph remains the optimizer's objective. Without
-`init_features`, seeded random initialization is used. This path exposes the
-result through `embedding_` rather than `transform()`.
+`init_features`, seeded random initialization is used. Use `fit_graph()` when
+you need the fitted estimator and `fit_graph_transform()` when you only need
+the embedding array.
 
 ## Quick start
 
@@ -77,35 +78,49 @@ This small example uses scikit-learn's built-in
 digits dataset, so it does not need a download:
 
 ```python
-import numpy as np
+import matplotlib.pyplot as plt
 from sklearn.datasets import load_digits
 from sklearn.preprocessing import StandardScaler
 
 from imste import IteratedMinimumSpanningTreeEmbedder
 
 digits = load_digits()
-rng = np.random.default_rng(42)
-rows = rng.choice(len(digits.data), size=500, replace=False)
-X = StandardScaler().fit_transform(digits.data[rows])
+X = StandardScaler().fit_transform(digits["data"])
 
-mapper = IteratedMinimumSpanningTreeEmbedder(
-    n_msts=5,
-    n_epochs=300,
-    metric="cosine",
-    random_state=42,
-)
+mapper = IteratedMinimumSpanningTreeEmbedder()
 embedding = mapper.fit_transform(X)
 
-print(embedding.shape)  # (500, 2)
+plt.scatter(embedding[:, 0], embedding[:, 1], c=digits.target, cmap="tab10", s=10)
 ```
+
+### Fit from a distance graph
+
+This example builds a complete pairwise distance graph from the built-in
+digits data, then calls `fit_graph_transform()` to return only the embedding:
 
 ```python
+import matplotlib.pyplot as plt
+from scipy.sparse import csr_matrix
+from sklearn.datasets import load_digits
+from scipy.spatial.distance import cdist
+from sklearn.preprocessing import StandardScaler
+
 from imste import IteratedMinimumSpanningTreeEmbedder
 
-mapper = IteratedMinimumSpanningTreeEmbedder(n_msts=10, n_epochs=300)
-mapper.fit_graph(distance_graph, init_features=X)  # PCA-seed from X
-embedding = mapper.embedding_
+digits = load_digits()
+X = StandardScaler().fit_transform(digits.data)
+
+# The complete digits distance matrix is small enough to hold in memory.
+distance_matrix = cdist(X, X, metric="euclidean")
+distance_graph = csr_matrix(distance_matrix)
+
+graph_embedding = IteratedMinimumSpanningTreeEmbedder().fit_graph_transform(distance_graph)
+
+plt.scatter(graph_embedding[:, 0], graph_embedding[:, 1], c=digits.target, cmap="tab10", s=10)
 ```
+
+Pairwise distance matrices grow quadratically, so for larger datasets prefer
+constructing a sparse neighbor graph directly.
 
 For larger datasets, FAMST is the default sparse approximate builder. To use
 the exact Prim builder instead, set `mst_method="prim"`:

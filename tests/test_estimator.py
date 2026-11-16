@@ -1,3 +1,5 @@
+import warnings
+
 import numpy as np
 import pytest
 import torch
@@ -5,7 +7,7 @@ from sklearn.base import clone
 from scipy.spatial.distance import cdist
 from scipy import sparse
 
-from imste import IteratedMinimumSpanningTreeEmbedder
+from imste import IteratedMinimumSpanningTreeEmbedder, fit_graph_transform
 from imste.inductive import InductiveIMSTE
 from imste._estimator import (
     _append_candidate_attraction_edges,
@@ -339,6 +341,28 @@ def test_fit_graph_uses_random_initialization_with_default_pca_option():
     np.testing.assert_array_equal(estimator.embedding_, expected)
 
 
+def test_fit_graph_transform_returns_embedding_directly():
+    graph = sparse.csr_matrix(
+        [[0.0, 1.0, 2.0], [1.0, 0.0, 1.0], [2.0, 1.0, 0.0]]
+    )
+    params = dict(
+        n_msts=1,
+        n_epochs=0,
+        multilevel_init=False,
+        gravity_strength=0,
+        mean_shift_iterations=0,
+        random_state=3,
+    )
+    estimator = IteratedMinimumSpanningTreeEmbedder(**params)
+    embedding = estimator.fit_graph_transform(graph)
+    function_embedding = fit_graph_transform(graph, **params)
+
+    assert embedding.shape == (3, 2)
+    assert np.isfinite(embedding).all()
+    np.testing.assert_array_equal(embedding, estimator.embedding_)
+    np.testing.assert_array_equal(function_embedding, embedding)
+
+
 def test_pca_init_requires_boolean():
     with pytest.raises(ValueError, match="pca_init must be a boolean"):
         IteratedMinimumSpanningTreeEmbedder(pca_init="yes").fit(small_data())
@@ -619,6 +643,29 @@ def test_cosine_metric_skips_gravity_automatically():
     assert estimator.gravity_time_ == 0.0
     assert estimator.gravity_region_count_ == 0
     assert estimator.embedding_.shape == (len(small_data()), 2)
+
+
+@pytest.mark.parametrize("sparse_input", [False, True])
+def test_cosine_prim_avoids_dense_matmul_runtime_warnings(sparse_input):
+    X = small_data()
+    if sparse_input:
+        X = sparse.csr_matrix(X)
+    estimator = IteratedMinimumSpanningTreeEmbedder(
+        n_msts=1,
+        n_epochs=0,
+        metric="cosine",
+        mst_method="prim",
+        multilevel_init=False,
+        mean_shift_iterations=0,
+        device="cpu",
+    )
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", RuntimeWarning)
+        embedding = estimator.fit_transform(X)
+
+    assert embedding.shape == (len(small_data()), 2)
+    assert np.isfinite(embedding).all()
 
 
 @pytest.mark.parametrize(

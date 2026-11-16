@@ -178,6 +178,16 @@ class _EstimatorGraphMethods:
             self._progress_reporter.finish()
         return self
 
+    def fit_graph_transform(
+        self,
+        distance_graph: sparse.spmatrix,
+        *,
+        init_features: object | None = None,
+    ) -> np.ndarray:
+        """Fit from a sparse distance graph and return the embedding array."""
+        self.fit_graph(distance_graph, init_features=init_features)
+        return self.embedding_.copy()
+
     def transform(self, X: object) -> np.ndarray:
         """Return fitted coordinates for the exact training rows only."""
         if getattr(self, "graph_input_", False):
