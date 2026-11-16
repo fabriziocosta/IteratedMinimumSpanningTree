@@ -127,7 +127,8 @@ class IteratedMinimumSpanningTreeEmbedder(
     gravity_strength : float, default=0.2
         Attraction toward density-weighted region cores after IMSTE. Set to zero
         to disable gravity. Gravity requires dense Euclidean features and at
-        least two embedding dimensions; it refines the first two.
+        least two embedding dimensions; it refines the first two. It is skipped
+        automatically when ``metric='cosine'``.
     gravity_neighbors : int, default=15
         Feature-space neighbors used to build gravity regions.
     gravity_resolution : float, default=1.0
@@ -329,9 +330,9 @@ class IteratedMinimumSpanningTreeEmbedder(
         gravity_strength = _finite_nonnegative(
             "gravity_strength", self.gravity_strength
         )
-        gravity_enabled = gravity_strength > 0.0
-        if gravity_enabled and self.metric != "euclidean":
-            raise ValueError("gravity refinement currently requires metric='euclidean'.")
+        gravity_enabled = gravity_strength > 0.0 and self.metric == "euclidean"
+        if not gravity_enabled:
+            gravity_strength = 0.0
         if gravity_enabled and n_components < 2:
             raise ValueError("gravity refinement requires n_components >= 2.")
         gravity_neighbors = _positive_integer(

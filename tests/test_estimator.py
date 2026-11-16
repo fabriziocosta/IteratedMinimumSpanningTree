@@ -605,6 +605,22 @@ def test_explicit_rinnd_backend_rejects_cosine_metric():
         estimator._validated_fit_options()
 
 
+def test_cosine_metric_skips_gravity_automatically():
+    estimator = IteratedMinimumSpanningTreeEmbedder(
+        n_msts=1,
+        n_epochs=0,
+        metric="cosine",
+        mst_method="prim",
+        multilevel_init=False,
+        mean_shift_iterations=0,
+        device="cpu",
+    ).fit(small_data())
+
+    assert estimator.gravity_time_ == 0.0
+    assert estimator.gravity_region_count_ == 0
+    assert estimator.embedding_.shape == (len(small_data()), 2)
+
+
 @pytest.mark.parametrize(
     ("parameter", "value"),
     [

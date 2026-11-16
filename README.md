@@ -71,7 +71,8 @@ result through `embedding_` rather than `transform()`.
 ## Quick start
 
 IMSTE uses Euclidean distance by default and also supports cosine distance
-with `metric="cosine"`. Scale features first when they have different ranges.
+with `metric="cosine"`. Gravity is automatically skipped for cosine fits;
+mean shift remains available. Scale features first when they have different ranges.
 This small example uses scikit-learn's built-in
 digits dataset, so it does not need a download:
 
@@ -348,7 +349,7 @@ library defaults; notebook recommendations can intentionally differ.
 | `include_knn_attraction` | `False` | Also attract along FAMST candidate-neighbor edges in Euclidean `fit(X)` |
 | `gravity_neighbors` | `15` | Feature-space neighbors for the RINND/Leiden region graph |
 | `gravity_resolution` | `1.0` | Leiden partition resolution |
-| `gravity_strength` | `0.2` | Attraction toward each density-weighted region core; set to `0` to disable gravity |
+| `gravity_strength` | `0.2` | Attraction toward each density-weighted region core; set to `0` to disable gravity; skipped automatically with `metric="cosine"` |
 | `mean_shift_iterations` | `1` | Number of mean-shift refinement iterations after gravity; set to `0` to disable mean shift |
 | `mean_shift_step_size` | `0.5` | Fraction of each mean-shift update applied per iteration |
 | `gravity_core_quantile` | `0.95` | Within-region density quantile defining the core points |
