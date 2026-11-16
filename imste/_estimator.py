@@ -318,8 +318,8 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
         Refinement epochs at each coarsened level.
     n_epochs : int, default=200
         Number of optimization epochs.
-    batch_size : int, default=32768
-        Maximum active edges per MPS update batch. Ignored by the CPU optimizer.
+    batch_size : int, default=131072
+        Maximum active edges per GPU update batch. Ignored by the CPU optimizer.
     learning_rate : float, default=0.05
         Base SGD step size; updates are sample-scaled and decay linearly by epoch.
     negative_ratio : int, default=5
@@ -334,9 +334,10 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
         Seed controlling initialization, edge ordering, and negative sampling.
     epsilon : float, default=1e-4
         Smoothing added to squared distances in the logarithmic attraction.
-    device : {'auto', 'cpu', 'mps'}, default='auto'
-        Optimizer device. ``'auto'`` and ``'cpu'`` select the Numba CPU backend;
-        ``'mps'`` selects batched PyTorch updates on an available Apple GPU.
+    device : {'auto', 'cpu', 'mps', 'cuda'}, default='auto'
+        ``'auto'`` selects MPS on Apple Silicon, CUDA when available, and CPU
+        otherwise. ``'cpu'`` selects the Numba optimizer; ``'mps'`` and
+        ``'cuda'`` select their corresponding PyTorch GPU backends.
     mst_method : {'prim', 'famst'}, default='famst'
         ``'prim'`` constructs exact trees; CSR inputs avoid an all-pairs
         distance matrix but still take quadratic time.
@@ -418,7 +419,7 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
         n_msts: int = 15,
         n_components: int = 2,
         n_epochs: int = 200,
-        batch_size: int = 32768,
+        batch_size: int = 131072,
         learning_rate: float = 0.05,
         negative_ratio: int = 5,
         lambda_rep: float = 0.5,
@@ -632,18 +633,40 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
             "none",
         }:
             raise ValueError("pca_init_scaling must be either 'global' or 'none'.")
-        if self.device not in {"auto", "cpu", "mps"}:
-            raise ValueError("device must be one of 'auto', 'cpu', or 'mps'.")
+        if self.device not in {"auto", "cpu", "mps", "cuda"}:
+            raise ValueError("device must be one of 'auto', 'cpu', 'mps', or 'cuda'.")
         resolved_device = "cpu"
-        if self.device == "mps":
-            import torch
-
-            if not torch.backends.mps.is_available():
-                raise RuntimeError(
-                    "device='mps' requires an MPS-capable PyTorch installation on a "
-                    "Mac with a supported Apple GPU."
+        if self.device != "cpu":
+            try:
+                import torch
+            except ImportError:
+                if self.device != "auto":
+                    raise RuntimeError(
+                        f"device={self.device!r} requires PyTorch with a GPU backend."
+                    )
+            else:
+                mps_backend = getattr(torch.backends, "mps", None)
+                mps_available = (
+                    mps_backend is not None and mps_backend.is_available()
                 )
-            resolved_device = "mps"
+                cuda_available = torch.cuda.is_available()
+                if self.device == "mps":
+                    if not mps_available:
+                        raise RuntimeError(
+                            "device='mps' requires an MPS-capable PyTorch installation "
+                            "on a Mac with a supported Apple GPU."
+                        )
+                    resolved_device = "mps"
+                elif self.device == "cuda":
+                    if not cuda_available:
+                        raise RuntimeError(
+                            "device='cuda' requires an available CUDA-capable GPU."
+                        )
+                    resolved_device = "cuda"
+                elif mps_available:
+                    resolved_device = "mps"
+                elif cuda_available:
+                    resolved_device = "cuda"
         return {
             "n_msts": n_msts,
             "n_components": n_components,
@@ -795,10 +818,14 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
             optimizer_profile["coordinate_updates"] += update_seconds
 
         optimizer = optimize_embedding
-        if resolved_device == "mps":
-            from ._optimizer_mps import optimize_embedding_mps
+        if resolved_device in {"mps", "cuda"}:
+            from functools import partial
 
-            optimizer = optimize_embedding_mps
+            from ._optimizer_torch import optimize_embedding_torch
+
+            optimizer = partial(
+                optimize_embedding_torch, device_type=resolved_device
+            )
             optimizer_batch_size = options["batch_size"]
         else:
             optimizer_batch_size = None
@@ -946,10 +973,14 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
                 seed_rng.standard_normal((n_nodes, n_components)) * 1e-3
             ).astype(np.float32)
         optimizer = optimize_embedding
-        if resolved_device == "mps":
-            from ._optimizer_mps import optimize_embedding_mps
+        if resolved_device in {"mps", "cuda"}:
+            from functools import partial
 
-            optimizer = optimize_embedding_mps
+            from ._optimizer_torch import optimize_embedding_torch
+
+            optimizer = partial(
+                optimize_embedding_torch, device_type=resolved_device
+            )
         for level_index in range(len(levels), -1, -1):
             level_edges = quotient_edges if level_index == len(levels) else None
             level_weights = quotient_weights if level_index == len(levels) else None
@@ -998,7 +1029,7 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
                     edge_weights=level_weights,
                     progress_callback=self._active_progress_callback,
                 )
-                if resolved_device == "mps":
+                if resolved_device in {"mps", "cuda"}:
                     kwargs["batch_size"] = options["batch_size"]
                 ranks_at_level = np.ones(len(level_edges), dtype=np.int32)
                 optimizer(coordinates, level_edges, ranks_at_level, **kwargs)
@@ -1092,9 +1123,9 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
         `gravity_neighbor_graph_reused_`. Feature based FAMST gravity fits expose
         the high-dimensional graph used by gravity as
         `feature_neighbor_graph_`. Mean shift runs after gravity and exposes
-        its stage time and iteration count. MPS reports negative sampling and
-        coordinate updates as one combined duration to avoid per-batch Metal
-        event recording on long fits.
+        its stage time and iteration count. GPU backends report negative
+        sampling and coordinate updates as one combined duration to avoid
+        per-batch device event recording on long fits.
         """
         fit_started = time.perf_counter()
         del y  # Unsupervised: labels are intentionally never used.

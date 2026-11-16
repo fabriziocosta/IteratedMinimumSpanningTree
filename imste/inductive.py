@@ -338,6 +338,8 @@ class InductiveIMSTE(TransformerMixin, BaseEstimator):
 
         if device.type == "mps":
             torch.mps.synchronize()
+        elif device.type == "cuda":
+            torch.cuda.synchronize(device)
         self.projection_fit_time_ = time.perf_counter() - projection_started
         self.training_loss_ = float(training_loss.cpu())
         self.best_validation_loss_ = best_validation_loss

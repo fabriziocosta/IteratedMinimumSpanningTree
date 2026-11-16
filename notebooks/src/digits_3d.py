@@ -26,6 +26,8 @@ def _available_devices() -> list[str]:
     devices = ["auto", "cpu"]
     if torch.backends.mps.is_available():
         devices.append("mps")
+    if torch.cuda.is_available():
+        devices.append("cuda")
     return devices
 
 
@@ -34,7 +36,7 @@ def fit_and_plot_mst_3d(
     labels,
     n_msts=15,
     n_epochs=200,
-    batch_size=32768,
+    batch_size=131072,
     learning_rate=0.05,
     negative_ratio=5,
     lambda_rep=0.5,
@@ -204,7 +206,7 @@ def display_interactive_mst_3d(
         style={"description_width": "initial"},
     )
     batch_size = widgets.IntSlider(
-        value=32768, min=4096, max=131072, step=4096,
+        value=131072, min=4096, max=262144, step=4096,
         description="Batch size (MPS)", continuous_update=False,
         style={"description_width": "initial"},
     )
@@ -261,7 +263,7 @@ def display_interactive_mst_3d(
     batch_size.layout.display = "none"
 
     def update_batch_size_visibility(change) -> None:
-        batch_size.layout.display = "" if change["new"] == "mps" else "none"
+        batch_size.layout.display = "" if change["new"] in {"auto", "mps", "cuda"} else "none"
 
     fit_button = widgets.Button(
         description="Fit 3D embedding",
@@ -278,7 +280,7 @@ def display_interactive_mst_3d(
     def reset_sliders(_=None):
         sample_count.value = min(1000, max_instances)
         n_msts.value = 15
-        batch_size.value = 32768
+        batch_size.value = 131072
         mst_method.value = "famst"
         n_epochs.value = 200
         learning_rate.value = 0.05

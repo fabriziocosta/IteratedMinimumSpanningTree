@@ -298,7 +298,7 @@ error. The per-edge maximum and component pairs remain available for review.
 | `multilevel_base_size` | `512` | Stop coarsening at or below this graph size |
 | `multilevel_epochs` | `1` | Refinement epochs at each coarsened graph level |
 | `n_epochs` | `200` | Coordinate-optimization epochs |
-| `batch_size` | `32768` | Maximum active edges per MPS update batch; ignored by CPU optimizer |
+| `batch_size` | `131072` | Maximum active edges per GPU update batch; ignored by CPU optimizer |
 | `learning_rate` | `0.05` | Coordinate optimizer learning rate |
 | `negative_ratio` | `5` | Non-neighbors sampled per endpoint of each positive edge |
 | `lambda_rep` | `0.5` | Repulsion share, from 0 to 1 |
@@ -306,7 +306,7 @@ error. The per-edge maximum and component pairs remain available for review.
 | `logistic_temperature` | `0.5` | Logistic repulsion softness; must be positive |
 | `epsilon` | `1e-4` | Smoothing for the logarithmic attraction |
 | `random_state` | `42` | Seed for initialization, shuffling, and sampling |
-| `device` | `"auto"` | `"auto"` and `"cpu"` select CPU; `"mps"` selects Apple's PyTorch GPU backend |
+| `device` | `"auto"` | Selects MPS on Apple Silicon, CUDA when available, then CPU; `"cpu"`, `"mps"`, and `"cuda"` can be selected explicitly |
 | `metric` | `"euclidean"` | Feature distance for the graph: `"euclidean"` or `"cosine"` |
 | `mst_method` | `"famst"` | Sparse approximate `"famst"` or exact dense `"prim"` |
 | `mst_neighbor_backend` | `"auto"` | `"auto"`, `"rinnd"`, `"pynndescent"`, or `"mps_exact"` FAMST neighbor search |
@@ -376,12 +376,12 @@ the graph cannot be reduced, the configured PCA or random initialization is
 used.
 
 The selected optimizer device is available as `mapper.device_` after fitting.
-`device="auto"` keeps optimization on CPU. With `device="mps"`, the batched
-optimizer runs on the Apple GPU. The independent
+`device="auto"` selects Apple's Metal Performance Shaders backend on Apple
+Silicon, CUDA when available on other systems, and CPU otherwise. The batched
+optimizer uses the selected GPU, while CPU remains the fallback. The independent
 `mst_neighbor_backend="auto"` setting prefers RINND for dense Euclidean FAMST
-inputs, while `"mps_exact"` selects exact chunked neighbor search on MPS. MPS
-requires
-`torch.backends.mps.is_available()` to be true. For example:
+inputs, while `"mps_exact"` selects exact chunked neighbor search on MPS. Explicit
+GPU selection requires the matching PyTorch backend to be available. For example:
 
 ```python
 mapper = IteratedMinimumSpanningTreeEmbedder(
@@ -393,12 +393,12 @@ mapper = IteratedMinimumSpanningTreeEmbedder(
 embedding = mapper.fit_transform(X)
 ```
 
-MPS samples negative pairs and computes updates for each batch on the GPU, then
-applies batches sequentially. A rare exact CPU fallback handles unusually dense
-neighborhoods. MPS and CPU builds use different neighbor-search methods, so
-their graph and embedding can differ. Larger batches can improve GPU utilization
-and use more memory; changing the batch size also changes the MPS update
-trajectory. CPU runs ignore this setting.
+The GPU optimizer samples negative pairs and computes updates for each batch on
+the GPU, then applies batches sequentially. A rare exact CPU fallback handles
+unusually dense neighborhoods. GPU and CPU builds can use different
+neighbor-search methods, so their graph and embedding can differ. Larger batches
+can improve GPU utilization and use more memory; changing the batch size also
+changes the GPU update trajectory. CPU runs ignore this setting.
 
 ### MLP parameters
 

@@ -249,9 +249,9 @@ class IMSTEProgressReporter:
             f"{estimator.final_embedding_optimization_time_:.3f}s"
         )
         self.log(f"Embedding optimization: {estimator.embedding_optimization_time_:.3f}s")
-        if estimator.device_ == "mps":
+        if estimator.device_ in {"mps", "cuda"}:
             self.log(
-                "  Final MPS negative sampling and coordinate updates: "
+                f"  Final {estimator.device_.upper()} negative sampling and coordinate updates: "
                 f"{estimator.optimizer_coordinate_update_time_:.3f}s combined"
             )
         else:

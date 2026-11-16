@@ -201,7 +201,7 @@ def run_high_dim_mst_gallery(
     n_components: int = 2,
     n_msts: int = 4,
     n_epochs: int = 200,
-    batch_size: int = 32768,
+    batch_size: int = 131072,
     learning_rate: float = 0.05,
     mst_method: str = "famst",
     mst_neighbor_backend: str = "auto",

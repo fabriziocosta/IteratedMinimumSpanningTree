@@ -35,6 +35,8 @@ def _available_devices() -> list[str]:
     devices = ["auto", "cpu"]
     if torch.backends.mps.is_available():
         devices.append("mps")
+    if torch.cuda.is_available():
+        devices.append("cuda")
     return devices
 
 
@@ -159,9 +161,9 @@ def display_interactive_embedding(
         style={"description_width": "initial"},
     )
     batch_size = widgets.IntSlider(
-        value=32768,
+        value=131072,
         min=4096,
-        max=131072,
+        max=262144,
         step=4096,
         description="Batch size (MPS)",
         continuous_update=False,
@@ -291,7 +293,7 @@ def display_interactive_embedding(
         pca_init_scaling.disabled = not change["new"]
 
     def update_batch_size_visibility(change) -> None:
-        batch_size.layout.display = "" if change["new"] == "mps" else "none"
+        batch_size.layout.display = "" if change["new"] in {"auto", "mps", "cuda"} else "none"
 
     fit_button = widgets.Button(
         description="Fit embedding",
@@ -485,7 +487,7 @@ def display_interactive_embedding(
         negative_ratio.value = 5
         compute_knn.value = False
         n_epochs.value = 200
-        batch_size.value = 32768
+        batch_size.value = 131072
         embedding_type.value = "transductive"
         mlp_n_layers.value = 6
         mlp_layer_size.value = 128

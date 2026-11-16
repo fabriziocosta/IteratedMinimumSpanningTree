@@ -519,7 +519,7 @@ def prepare_arxiv_projection_cache(
             imste_settings["mst_method"],
             imste_settings["mst_neighbors"],
             imste_settings["mst_neighbor_backend"],
-            imste_settings["device"],
+            imste_settings.get("device", "auto"),
             metric,
             random_state,
         ],
@@ -552,7 +552,7 @@ def prepare_arxiv_projection_cache(
     }
     new_parameter_defaults = {
         "n_components": 2,
-        "batch_size": 32768,
+        "batch_size": 131072,
         "learning_rate": 0.05,
         "epsilon": 1e-4,
         "logistic_margin": 1.0,
