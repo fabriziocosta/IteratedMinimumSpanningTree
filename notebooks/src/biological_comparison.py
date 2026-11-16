@@ -194,6 +194,7 @@ def make_umap(**parameters):
         "min_dist": 0.1,
         "metric": "euclidean",
         "random_state": 42,
+        "compatibility_layout": False,
         "n_jobs": 1,
     }
     defaults.update(parameters)

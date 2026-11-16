@@ -123,6 +123,7 @@ def main() -> None:
                     n_components=2,
                     n_epochs=args.epochs,
                     random_state=seed,
+                    compatibility_layout=False,
                     n_jobs=1,
                 )
                 started = time.perf_counter()

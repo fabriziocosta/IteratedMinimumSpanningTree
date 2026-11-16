@@ -202,6 +202,7 @@ def run_umap_comparisons(
             n_epochs=n_epochs,
             metric="euclidean",
             random_state=random_state,
+            compatibility_layout=False,
             n_jobs=1,
         )
         print(f"Fitting UMAP: {name} ...", flush=True)
