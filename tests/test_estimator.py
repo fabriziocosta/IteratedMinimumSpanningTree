@@ -25,7 +25,7 @@ def small_data():
 
 def test_sklearn_api_and_training_transform():
     estimator = IteratedMinimumSpanningTreeEmbedder(
-        n_msts=1, n_epochs=3, batch_size=4, random_state=7
+        n_msts=1, n_epochs=3, batch_size=4, random_state=7, device="cpu"
     )
     assert clone(estimator).get_params() == estimator.get_params()
 
@@ -187,7 +187,8 @@ def test_seed_reproduces_embedding():
 def test_default_pca_initialization_globally_scales_standardized_dense_pca():
     X = np.array([[0.0, 3.0, 4.0], [1.0, 1.0, 2.0], [2.0, 0.0, 1.0], [4.0, 2.0, 0.0]])
     estimator = IteratedMinimumSpanningTreeEmbedder(
-        n_msts=1, n_epochs=0, mst_method="prim", random_state=12
+        n_msts=1, n_epochs=0, mst_method="prim", random_state=12,
+        multilevel_init=False, gravity_strength=0, mean_shift_iterations=0
     ).fit(X)
 
     from sklearn.decomposition import PCA
@@ -200,7 +201,8 @@ def test_default_pca_initialization_globally_scales_standardized_dense_pca():
     np.testing.assert_array_equal(
         estimator.embedding_,
         IteratedMinimumSpanningTreeEmbedder(
-            n_msts=1, n_epochs=0, mst_method="prim", random_state=12
+            n_msts=1, n_epochs=0, mst_method="prim", random_state=12,
+        multilevel_init=False, gravity_strength=0, mean_shift_iterations=0
         )
         .fit(X)
         .embedding_,
@@ -216,6 +218,7 @@ def test_pca_init_scaling_can_preserve_raw_pca_magnitudes():
         mst_method="prim",
         random_state=6,
         pca_init_scaling="none",
+        multilevel_init=False, gravity_strength=0, mean_shift_iterations=0,
     ).fit(X)
     random_init = IteratedMinimumSpanningTreeEmbedder(
         n_msts=1,
@@ -223,6 +226,7 @@ def test_pca_init_scaling_can_preserve_raw_pca_magnitudes():
         mst_method="prim",
         random_state=6,
         pca_init=False,
+        multilevel_init=False, gravity_strength=0, mean_shift_iterations=0,
     ).fit(X)
 
     np.testing.assert_allclose(raw_pca.embedding_, pca_scores, atol=1e-6)
@@ -273,6 +277,7 @@ def test_pca_init_false_preserves_seeded_random_initialization():
         mst_method="prim",
         random_state=seed,
         pca_init=False,
+        multilevel_init=False, gravity_strength=0, mean_shift_iterations=0,
     ).fit(small_data())
     rng = np.random.RandomState(seed)
     rng.randint(0, np.iinfo(np.int32).max)
@@ -313,6 +318,7 @@ def test_explicit_coordinates_take_precedence_over_multilevel(monkeypatch):
         multilevel_init=True,
         init_coordinates=coordinates,
         mst_method="prim",
+        gravity_strength=0, mean_shift_iterations=0,
     ).fit(small_data())
     np.testing.assert_array_equal(estimator.embedding_, coordinates.astype(np.float32))
 
@@ -321,7 +327,8 @@ def test_fit_graph_uses_random_initialization_with_default_pca_option():
     graph = sparse.csr_matrix([[0.0, 1.0], [1.0, 0.0]])
     seed = 31
     estimator = IteratedMinimumSpanningTreeEmbedder(
-        n_msts=1, n_epochs=0, random_state=seed
+        n_msts=1, n_epochs=0, random_state=seed, multilevel_init=False,
+        gravity_strength=0, mean_shift_iterations=0,
     ).fit_graph(graph)
     rng = np.random.RandomState(seed)
     rng.randint(0, np.iinfo(np.int32).max)
@@ -550,6 +557,34 @@ def test_mps_device_requires_available_backend(monkeypatch):
         IteratedMinimumSpanningTreeEmbedder(
             n_msts=1, n_epochs=0, random_state=5, device="mps"
         ).fit(small_data())
+
+
+@pytest.mark.parametrize(
+    ("mps_available", "cuda_available", "expected"),
+    [(True, True, "mps"), (False, True, "cuda"), (False, False, "cpu")],
+)
+def test_auto_device_prefers_mps_then_cuda_then_cpu(
+    monkeypatch,
+    mps_available,
+    cuda_available,
+    expected,
+):
+    monkeypatch.setattr(
+        torch.backends.mps, "is_available", lambda: mps_available
+    )
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: cuda_available)
+    options = IteratedMinimumSpanningTreeEmbedder(
+        device="auto"
+    )._validated_fit_options()
+    assert options["resolved_device"] == expected
+
+
+def test_explicit_cuda_requires_available_backend(monkeypatch):
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    with pytest.raises(RuntimeError, match="CUDA-capable GPU"):
+        IteratedMinimumSpanningTreeEmbedder(
+            device="cuda"
+        )._validated_fit_options()
 
 
 def test_rinnd_neighbor_backend_does_not_override_optimizer_device(monkeypatch):

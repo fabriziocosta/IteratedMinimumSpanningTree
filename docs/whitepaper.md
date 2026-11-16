@@ -201,9 +201,10 @@ samples sequentially. Linear learning-rate decay is applied across epochs.
 The normalized mean gradient is rescaled by the sample count, with a
 calibration factor chosen to match the former optimizer's default quality.
 After each epoch it subtracts the coordinate mean, removing global translation
-drift without changing pairwise differences. `device="auto"` and
-`device="cpu"` select the sequential CPU Numba optimizer. `device="mps"`
-selects a PyTorch MPS backend that computes updates for each active-edge batch
+drift without changing pairwise differences. `device="auto"` selects MPS on
+Apple Silicon, CUDA when available, then CPU. `device="cpu"` selects the
+sequential CPU Numba optimizer. `device="mps"` and `device="cuda"` select
+PyTorch GPU backends that compute updates for each active-edge batch
 together and applies batches sequentially. This path has a different trajectory
 from sequential CPU SGD. FAMST neighbor search is selected independently by
 `mst_neighbor_backend`, so RINND can build the candidate graph while the
@@ -230,20 +231,20 @@ diagnostic.
 | `logistic_temperature` | 0.5 | Softness of the logistic repulsion; must be positive |
 | `n_components` | 2 | Number of output dimensions |
 | `n_epochs` | 200 | Number of rank-scheduled optimization epochs |
-| `batch_size` | 32768 | Maximum active edges per MPS batch; ignored by CPU optimizer |
+| `batch_size` | 131072 | Maximum active edges per GPU batch; ignored by CPU optimizer |
 | `learning_rate` | 0.05 | Base SGD learning rate, sample-scaled and linearly decayed |
 | `negative_ratio` | 5 | Negative samples per endpoint of each positive edge |
 | `lambda_rep` | 0.5 | Repulsion share; attraction uses `1 - lambda_rep` |
 | `epsilon` | `1e-4` | Smoothing for the pairwise edge probability |
 | `random_state` | 42 | Seed for initialization, shuffling, and sampling |
-| `device` | `auto` | `auto`/`cpu` use Numba CPU; `mps` uses batched PyTorch MPS updates |
+| `device` | `auto` | Selects MPS on Apple Silicon, CUDA when available, then CPU |
 | `pca_init` | `True` | Use standardized PCA scores to initialize feature-based fits |
 | `pca_init_scaling` | `global` | Scale PCA scores uniformly into `[-1, 1]`; `none` preserves their magnitudes |
 
 With `mst_neighbor_backend="auto"`, dense Euclidean FAMST inputs use RINND when
 available; otherwise graph construction retains its device-based backend
-selection. RINND is optional (`pip install 'imste[rinnd]'`). The transductive
-optimizer uses Numba on CPU or PyTorch on MPS, depending on `device`,
+selection. RINND and PyNNDescent are installed as core project dependencies.
+The transductive optimizer uses Numba on CPU or PyTorch on the selected GPU,
 independently of the neighbor-search backend.
 
 ## 6. Practical use

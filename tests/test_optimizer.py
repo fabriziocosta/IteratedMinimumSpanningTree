@@ -10,6 +10,7 @@ from imste._optimizer import (
     optimize_embedding,
     rank_phases,
 )
+from imste._optimizer_torch import _complement_target_from_ordinal
 
 
 def test_attraction_gradient_matches_torch_autograd():
@@ -62,6 +63,22 @@ def test_expected_active_count_matches_inverse_rank_objective_normalizer():
     ranks = np.repeat(np.arange(1, 6, dtype=np.int32), 9)
     expected = 9 * np.sum(1.0 / np.arange(1, 6))
     assert np.isclose(expected_active_edge_count(ranks), expected)
+
+
+def test_dense_neighbor_complement_ordinals_skip_self_and_blocked_nodes():
+    n_samples = 7
+    source = 3
+    blocked = np.array([0, 1, 4, 6], dtype=np.int64)
+    adjacency_keys = np.sort(
+        np.concatenate(
+            [
+                np.array([source * n_samples + target for target in blocked]),
+                np.array([target * n_samples + source for target in blocked]),
+            ]
+        )
+    )
+    assert _complement_target_from_ordinal(source, adjacency_keys, n_samples, 0) == 2
+    assert _complement_target_from_ordinal(source, adjacency_keys, n_samples, 1) == 5
 
 
 def test_single_sgd_update_matches_explicit_gradient_and_recenter():
@@ -182,6 +199,31 @@ def test_mps_optimizer_accepts_direct_edge_weights():
         embedding,
         np.array([[0, 1], [1, 2]], dtype=np.int64),
         np.ones(2, dtype=np.int32),
+        n_epochs=2,
+        batch_size=2,
+        learning_rate=0.001,
+        negative_ratio=0,
+        lambda_rep=0.0,
+        epsilon=1e-4,
+        margin=1.0,
+        temperature=0.5,
+        random_state=9,
+        schedule_by_rank=False,
+        edge_weights=np.array([2.0, 1.0]),
+    )
+    assert np.isfinite(embedding).all()
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is unavailable")
+def test_cuda_optimizer_accepts_direct_edge_weights():
+    from imste._optimizer_torch import optimize_embedding_torch
+
+    embedding = np.array([[0.0, 0.0], [1.0, 0.5], [2.0, -1.0]], dtype=np.float32)
+    optimize_embedding_torch(
+        embedding,
+        np.array([[0, 1], [1, 2]], dtype=np.int64),
+        np.ones(2, dtype=np.int32),
+        device_type="cuda",
         n_epochs=2,
         batch_size=2,
         learning_rate=0.001,

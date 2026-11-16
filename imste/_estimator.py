@@ -2,17 +2,24 @@
 
 from __future__ import annotations
 
-import numbers
 import time
 from collections.abc import Callable
 
 import numpy as np
-from scipy import sparse
 from scipy.sparse import csr_matrix, issparse
 from sklearn.base import BaseEstimator, TransformerMixin
-from sklearn.decomposition import PCA
-from sklearn.utils.validation import check_array, check_is_fitted
+from sklearn.utils.validation import check_array
 
+from ._estimator_graph import _EstimatorGraphMethods
+from ._estimator_utils import (
+    _append_candidate_attraction_edges,
+    _finite_nonnegative,
+    _positive_integer,
+    _sample_negative_targets,
+    _sample_sparse_negative_targets,
+    _scale_initialization_coordinates,
+    _standardized_pca_initialization,
+)
 from ._optimizer import optimize_embedding
 from ._multilevel import (
     _canonical_edges,
@@ -20,260 +27,16 @@ from ._multilevel import (
     build_multilevel_hierarchy,
     expand_coordinates,
 )
-from .mst import build_mst_edges, iterated_graph_edges
+from .mst import build_mst_edges
 from .mst.prim import (
     _cosine_safe_normalize,
     iterated_prim_distance_edges as _iterated_mst_edges,
 )
 
 
-def _positive_integer(name: str, value: object, *, allow_zero: bool = False) -> int:
-    minimum = 0 if allow_zero else 1
-    if isinstance(value, (bool, np.bool_)) or not isinstance(value, numbers.Integral):
-        raise ValueError(
-            f"{name} must be an integer greater than or equal to {minimum}."
-        )
-    result = int(value)
-    if result < minimum:
-        raise ValueError(
-            f"{name} must be an integer greater than or equal to {minimum}."
-        )
-    return result
-
-
-def _finite_nonnegative(
-    name: str, value: object, *, strictly_positive: bool = False
-) -> float:
-    try:
-        result = float(value)
-    except (TypeError, ValueError) as exc:
-        raise ValueError(f"{name} must be a finite non-negative number.") from exc
-    if not np.isfinite(result) or result < 0 or (strictly_positive and result == 0):
-        qualifier = "positive" if strictly_positive else "non-negative"
-        raise ValueError(f"{name} must be a finite {qualifier} number.")
-    return result
-
-
-def _standardized_pca_initialization(
-    X: np.ndarray | csr_matrix,
-    n_components: int,
-    random_state: int | None,
-) -> np.ndarray:
-    """Return PCA scores after feature-wise standardization.
-
-    Each feature is centered and divided by its population standard deviation;
-    constant features use a scale of one. If more embedding dimensions are
-    requested than PCA can provide, the remaining score columns are zero.
-
-    Sparse inputs stay sparse. Their centered, standardized matrix is exposed
-    to the SVD solver as a linear operator, avoiding a dense copy of ``X``.
-    """
-    n_samples, n_features = X.shape
-    available_components = min(n_components, n_samples, n_features)
-    scores = np.zeros((n_samples, n_components), dtype=np.float64)
-    if available_components == 0:
-        return scores
-
-    if issparse(X):
-        X = csr_matrix(X, dtype=np.float64)
-        mean = np.asarray(X.mean(axis=0)).ravel()
-        second_moment = np.asarray(X.power(2).mean(axis=0)).ravel()
-        scale = np.sqrt(np.maximum(second_moment - mean**2, 0.0))
-        scale[scale == 0.0] = 1.0
-        scaled = X.multiply(1.0 / scale).tocsr()
-        scaled_mean = mean / scale
-
-        from scipy.sparse.linalg import LinearOperator, svds
-
-        # The standardized matrix is scaled - 1 * scaled_mean. These products
-        # apply that centering algebraically without storing the dense matrix.
-        def matvec(vector):
-            return np.asarray(scaled @ vector).ravel() - scaled_mean @ vector
-
-        def rmatvec(vector):
-            return np.asarray(scaled.T @ vector).ravel() - scaled_mean * np.sum(vector)
-
-        def matmat(matrix):
-            return (
-                np.asarray(scaled @ matrix)
-                - np.ones((n_samples, 1)) * (scaled_mean @ matrix)[None, :]
-            )
-
-        def rmatmat(matrix):
-            return (
-                np.asarray(scaled.T @ matrix)
-                - scaled_mean[:, None] * np.sum(matrix, axis=0)[None, :]
-            )
-
-        centered_standardized = LinearOperator(
-            shape=(n_samples, n_features),
-            matvec=matvec,
-            rmatvec=rmatvec,
-            matmat=matmat,
-            rmatmat=rmatmat,
-            dtype=np.float64,
-        )
-        left, singular_values, _ = svds(
-            centered_standardized,
-            k=available_components,
-            which="LM",
-            solver="propack",
-            random_state=random_state,
-        )
-        # PROPACK returns singular values in solver order; PCA orders axes by
-        # descending variance. Canonicalize signs so repeated seeded fits also
-        # return the same orientation for each score axis.
-        order = np.argsort(singular_values)[::-1]
-        left = left[:, order]
-        singular_values = singular_values[order]
-        pivot_rows = np.argmax(np.abs(left), axis=0)
-        signs = np.sign(left[pivot_rows, np.arange(available_components)])
-        signs[signs == 0.0] = 1.0
-        left *= signs
-        # PCA coordinates are left singular vectors multiplied by singular
-        # values. The right singular vectors are not needed for initialization.
-        pca_scores = left * singular_values
-    else:
-        dense = np.asarray(X, dtype=np.float64)
-        mean = dense.mean(axis=0)
-        scale = dense.std(axis=0)
-        scale[scale == 0.0] = 1.0
-        standardized = (dense - mean) / scale
-        pca_scores = PCA(
-            n_components=available_components,
-            svd_solver="full",
-        ).fit_transform(standardized)
-
-    # Keep the requested output shape even when PCA has fewer valid axes.
-    scores[:, :available_components] = pca_scores
-    return scores
-
-
-def _scale_initialization_coordinates(
-    coordinates: np.ndarray, scaling: str
-) -> np.ndarray:
-    """Apply one shared PCA-coordinate scale so scores fit the unit box."""
-    if scaling == "none":
-        return coordinates
-    if scaling != "global":
-        raise ValueError("pca_init_scaling must be either 'global' or 'none'.")
-
-    max_abs = float(np.max(np.abs(coordinates)))
-    if max_abs == 0.0:
-        return coordinates
-    return coordinates / max_abs
-
-
-def _append_candidate_attraction_edges(
-    edges: np.ndarray,
-    ranks: np.ndarray,
-    candidate_edges: np.ndarray,
-    n_samples: int,
-) -> tuple[np.ndarray, np.ndarray]:
-    """Append non-tree FAMST neighbor edges as rank-one attractions."""
-    edges = np.asarray(edges, dtype=np.int64).reshape(-1, 2)
-    ranks = np.asarray(ranks, dtype=np.int32).reshape(-1)
-    candidates = np.asarray(candidate_edges, dtype=np.int64).reshape(-1, 2)
-    if not candidates.size:
-        return edges, ranks
-    candidates = np.sort(candidates, axis=1)
-    candidate_keys = np.unique(candidates[:, 0] * n_samples + candidates[:, 1])
-    tree_edges = np.sort(edges, axis=1)
-    tree_keys = np.unique(tree_edges[:, 0] * n_samples + tree_edges[:, 1])
-    additional_keys = np.setdiff1d(candidate_keys, tree_keys, assume_unique=True)
-    if not additional_keys.size:
-        return edges, ranks
-    additional_edges = np.column_stack(
-        (additional_keys // n_samples, additional_keys % n_samples)
-    ).astype(np.int64, copy=False)
-    return (
-        np.vstack((edges, additional_edges)),
-        np.concatenate((ranks, np.ones(len(additional_edges), dtype=np.int32))),
-    )
-
-
-def _sample_negative_targets(
-    rng: np.random.RandomState,
-    packed_adjacency: np.ndarray,
-    negative_sources: np.ndarray,
-    n_samples: int,
-) -> np.ndarray:
-    """Sample non-neighbors with rejection and an exact dense-graph fallback."""
-    targets = rng.randint(n_samples, size=negative_sources.size)
-    invalid = np.ones(targets.size, dtype=bool)
-    for _ in range(8):
-        invalid_indices = np.flatnonzero(invalid)
-        if invalid_indices.size == 0:
-            break
-        candidate_targets = targets[invalid_indices]
-        blocked = packed_adjacency[
-            negative_sources[invalid_indices], candidate_targets >> 3
-        ]
-        bit_mask = 1 << (candidate_targets & 7)
-        accepted = (blocked & bit_mask) == 0
-        invalid[invalid_indices[accepted]] = False
-        invalid_indices = invalid_indices[~accepted]
-        targets[invalid_indices] = rng.randint(n_samples, size=invalid_indices.size)
-
-    for source in np.unique(negative_sources[invalid]):
-        source_indices = np.flatnonzero(invalid & (negative_sources == source))
-        blocked = np.unpackbits(
-            packed_adjacency[source], bitorder="little", count=n_samples
-        )
-        candidates = np.flatnonzero(blocked == 0)
-        if candidates.size == 0:
-            raise ValueError(
-                "Cannot sample a negative pair for a fully connected node."
-            )
-        targets[source_indices] = rng.choice(candidates, size=source_indices.size)
-    return targets
-
-
-def _sample_sparse_negative_targets(
-    rng: np.random.RandomState,
-    adjacency_keys: np.ndarray,
-    negative_sources: np.ndarray,
-    n_samples: int,
-) -> np.ndarray:
-    """Vectorized rejection-sample non-neighbors without a dense bit matrix."""
-    targets = rng.randint(n_samples, size=negative_sources.size).astype(np.intp)
-    invalid = np.ones(targets.size, dtype=bool)
-    for _ in range(8):
-        invalid_indices = np.flatnonzero(invalid)
-        if invalid_indices.size == 0:
-            break
-        sources = negative_sources[invalid_indices]
-        candidates = targets[invalid_indices]
-        keys = sources.astype(np.int64) * n_samples + candidates
-        locations = np.searchsorted(adjacency_keys, keys)
-        in_bounds = locations < adjacency_keys.size
-        blocked = np.zeros(keys.size, dtype=bool)
-        blocked[in_bounds] = adjacency_keys[locations[in_bounds]] == keys[in_bounds]
-        accepted = (sources != candidates) & ~blocked
-        invalid[invalid_indices[accepted]] = False
-        retry_indices = invalid_indices[~accepted]
-        targets[retry_indices] = rng.randint(n_samples, size=retry_indices.size)
-
-    # Rare for sparse graphs; handle unusually dense nodes exactly.
-    for source in np.unique(negative_sources[invalid]):
-        source_indices = np.flatnonzero(invalid & (negative_sources == source))
-        start = int(source) * n_samples
-        first = np.searchsorted(adjacency_keys, start)
-        last = np.searchsorted(adjacency_keys, start + n_samples)
-        blocked = adjacency_keys[first:last] - start
-        candidates = np.ones(n_samples, dtype=bool)
-        candidates[int(source)] = False
-        candidates[blocked] = False
-        available = np.flatnonzero(candidates)
-        if available.size == 0:
-            raise ValueError(
-                "Cannot sample a negative pair for a fully connected node."
-            )
-        targets[source_indices] = rng.choice(available, size=source_indices.size)
-    return targets
-
-
-class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
+class IteratedMinimumSpanningTreeEmbedder(
+    _EstimatorGraphMethods, TransformerMixin, BaseEstimator
+):
     """Learn training-row coordinates from ranked iterated spanning trees.
 
     Trees use unused edges where possible. When a residual graph has a local
@@ -347,9 +110,8 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
         FAMST uses the backend selected by ``mst_neighbor_backend``.
     mst_neighbor_backend : {'auto', 'rinnd', 'pynndescent', 'mps_exact'}, default='auto'
         Neighbor search backend for dense Euclidean FAMST inputs. ``'auto'``
-        prefers RINND when installed, otherwise it uses the existing device-based
+        prefers RINND when available, otherwise it uses the existing device-based
         choice. RINND search does not change the optimizer selected by ``device``.
-        RINND is optional; install it with ``pip install 'imste[rinnd]'``.
     metric : {'euclidean', 'cosine'}, default='euclidean'
         Feature distance used to construct the spanning-tree graph. Cosine
         distance with FAMST uses the exact Prim backend.
@@ -387,7 +149,7 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
     mean_shift_bandwidth_factor : float, default=5.0
         Gaussian bandwidth as a multiple of the median current 2D distance to
         the selected neighbor count.
-    mean_shift_step_size : float, default=1.0
+    mean_shift_step_size : float, default=0.5
         Interpolation from each coordinate toward its kernel-weighted mean, in
         the interval [0, 1].
     mean_shift_iterations : int, default=1
@@ -456,7 +218,7 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
         gravity_pack_gap_fraction: float = 0.25,
         mean_shift_neighbors: int = 100,
         mean_shift_bandwidth_factor: float = 5.0,
-        mean_shift_step_size: float = 1.0,
+        mean_shift_step_size: float = 0.5,
         mean_shift_iterations: int = 1,
     ) -> None:
         self.n_msts = n_msts
@@ -1340,226 +1102,3 @@ class IteratedMinimumSpanningTreeEmbedder(TransformerMixin, BaseEstimator):
         if return_intermediate:
             return self.embedding_before_gravity_.copy(), self.embedding_.copy()
         return self.embedding_.copy()
-
-    def fit_graph(
-        self,
-        distance_graph: sparse.spmatrix,
-        *,
-        init_features: object | None = None,
-    ) -> "IteratedMinimumSpanningTreeEmbedder":
-        """Fit directly from a sparse graph whose stored values are distances.
-
-        Every explicitly stored off-diagonal entry is a candidate edge; an
-        implicit sparse zero means that no edge is available. Edges are treated
-        as undirected, reciprocal entries use their smaller distance, and
-        explicit zero-distance edges are retained. The graph's connected
-        components define separate spanning forests. Later iterations reuse
-        short edges when necessary and increase their ranks, which reduces
-        their attraction weights.
-
-        ``init_features`` optionally supplies the sample-by-feature matrix used
-        for standardized PCA initialization. ``init_coordinates`` can instead
-        supply a complete initial embedding with one row per graph node and one
-        column per output dimension; it takes precedence over PCA. All rows
-        must follow the graph's order. Initialization affects coordinates only;
-        graph edges still determine the optimization objective. Without either
-        form of initialization, the seeded random start is used. The fitted
-        coordinates are available as ``embedding_``; feature-based ``transform``
-        is unavailable after ``fit_graph``.
-        """
-        fit_started = time.perf_counter()
-        options = self._validated_fit_options()
-        for name in ("feature_neighbor_graph_", "feature_neighbor_graph_reused_"):
-            if hasattr(self, name):
-                delattr(self, name)
-        if options["include_knn_attraction"]:
-            raise ValueError(
-                "include_knn_attraction is available for feature-based fit(X), "
-                "not fit_graph()."
-            )
-        if not sparse.issparse(distance_graph):
-            raise ValueError("distance_graph must be a SciPy sparse matrix.")
-        if (
-            distance_graph.ndim != 2
-            or distance_graph.shape[0] != distance_graph.shape[1]
-        ):
-            raise ValueError("distance_graph must be square.")
-        if distance_graph.shape[0] < 2:
-            raise ValueError("distance_graph must contain at least two samples.")
-
-        initialization_features = None
-        if init_features is not None:
-            initialization_features = check_array(
-                init_features, dtype=np.float64, ensure_2d=True, accept_sparse="csr"
-            )
-            if issparse(initialization_features):
-                initialization_features = csr_matrix(initialization_features)
-            if initialization_features.shape[0] != distance_graph.shape[0]:
-                raise ValueError(
-                    "init_features must have one row per distance_graph node."
-                )
-        if options["gravity_enabled"] and initialization_features is not None:
-            if issparse(initialization_features):
-                raise ValueError("gravity refinement currently requires dense features.")
-        mean_shift_enabled = (
-            options["mean_shift_iterations"] > 0
-            and options["mean_shift_step_size"] > 0
-        )
-        if mean_shift_enabled and initialization_features is None:
-            raise ValueError("mean shift in fit_graph() requires init_features.")
-
-        self._activate_progress_reporting()
-        graph_started = time.perf_counter()
-        edges, tree_ranks = iterated_graph_edges(
-            distance_graph,
-            options["n_msts"],
-            progress_callback=self._active_mst_progress_callback,
-            return_ranks=True,
-        )
-        self.graph_construction_time_ = time.perf_counter() - graph_started
-        if self._progress_reporter is not None:
-            self._progress_reporter.phase_finished(
-                "MST graph construction", self.graph_construction_time_
-            )
-        tree_ranks = np.asarray(tree_ranks, dtype=np.int32)
-        self._fit_edges(
-            n_samples=distance_graph.shape[0],
-            n_components=options["n_components"],
-            edges=edges,
-            tree_ranks=tree_ranks,
-            fit_started=fit_started,
-            resolved_device=options["resolved_device"],
-            schedule_by_rank=True,
-            initialization_features=initialization_features,
-            initial_coordinates=self.init_coordinates,
-            **{
-                name: value
-                for name, value in options.items()
-                if name not in {
-                    "n_components", "n_msts", "resolved_device",
-                    "mst_neighbor_backend",
-                }
-            },
-        )
-        self.embedding_before_gravity_ = self.embedding_.copy()
-        self.imste_fit_time_ = self.fit_time_
-        n_samples = distance_graph.shape[0]
-        feature_graph_width = options["gravity_neighbors"] if options["gravity_enabled"] else 1
-        feature_neighbor_graph = None
-        refinements_need_graph = options["gravity_enabled"]
-        if refinements_need_graph and initialization_features is not None:
-            if issparse(initialization_features) and options["gravity_enabled"]:
-                raise ValueError("gravity refinement currently requires dense features.")
-            feature_neighbor_graph = self._feature_neighbor_graph(
-                initialization_features,
-                feature_graph_width,
-                options["metric"],
-            )
-            self.feature_neighbor_graph_ = feature_neighbor_graph
-            self.feature_neighbor_graph_reused_ = False
-        if options["gravity_enabled"] and initialization_features is not None and n_samples >= 3:
-            from ._gravity import density_gravity_layout
-
-            gravity_started = time.perf_counter()
-            gravity_embedding, diagnostics = density_gravity_layout(
-                initialization_features,
-                self.embedding_before_gravity_[:, :2],
-                neighbors=min(options["gravity_neighbors"], n_samples - 1),
-                resolution=options["gravity_resolution"],
-                random_state=42 if self.random_state is None else self.random_state,
-                core_quantile=options["gravity_core_quantile"],
-                strength=options["gravity_strength"],
-                mass_power=options["gravity_mass_power"],
-                pack_regions=options["gravity_pack_regions"],
-                pack_radius_quantile=options["gravity_pack_radius_quantile"],
-                pack_gap_fraction=options["gravity_pack_gap_fraction"],
-                feature_neighbor_graph=feature_neighbor_graph,
-                feature_neighbor_metric=options["metric"],
-            )
-            self.embedding_ = self.embedding_before_gravity_.copy()
-            self.embedding_[:, :2] = gravity_embedding
-            self.gravity_membership_ = diagnostics["membership"]
-            self.gravity_point_mass_ = diagnostics["point_mass"]
-            self.gravity_region_count_ = int(diagnostics["region_count"])
-            self.gravity_regions_packed_ = bool(diagnostics["regions_packed"])
-            self.gravity_graph_construction_time_ = float(diagnostics["graph_seconds"])
-            self.gravity_neighbor_search_time_ = float(diagnostics["neighbor_search_seconds"])
-            self.gravity_neighbor_graph_reused_ = bool(diagnostics["neighbor_graph_reused"])
-            self.gravity_force_time_ = float(diagnostics["force_seconds"])
-            self.gravity_time_ = time.perf_counter() - gravity_started
-            if hasattr(self, "gravity_skipped_reason_"):
-                del self.gravity_skipped_reason_
-        else:
-            self.gravity_region_count_ = 0
-            self.gravity_regions_packed_ = False
-            self.gravity_graph_construction_time_ = 0.0
-            self.gravity_neighbor_search_time_ = 0.0
-            self.gravity_neighbor_graph_reused_ = False
-            self.gravity_force_time_ = 0.0
-            self.gravity_time_ = 0.0
-            if options["gravity_enabled"]:
-                self.gravity_skipped_reason_ = (
-                    "fit_graph() needs init_features to build the gravity graph."
-                )
-            elif hasattr(self, "gravity_skipped_reason_"):
-                del self.gravity_skipped_reason_
-            for name in ("gravity_membership_", "gravity_point_mass_"):
-                if hasattr(self, name):
-                    delattr(self, name)
-        self._apply_mean_shift(options)
-        self.fit_time_ = time.perf_counter() - fit_started
-        if self._progress_reporter is not None:
-            self._progress_reporter.finish()
-        return self
-
-    def transform(self, X: object) -> np.ndarray:
-        """Return fitted coordinates for the exact training rows only."""
-        if getattr(self, "graph_input_", False):
-            raise ValueError(
-                "transform(X) is unavailable after fit_graph(); use embedding_."
-            )
-        check_is_fitted(self, attributes=["embedding_", "X_fit_"])
-        self._check_feature_names(X)
-        X_checked = check_array(
-            X, dtype=np.float64, ensure_2d=True, accept_sparse="csr"
-        )
-        if issparse(X_checked):
-            X_checked = csr_matrix(X_checked)
-        if X_checked.shape[1] != self.n_features_in_:
-            raise ValueError(
-                f"X has {X_checked.shape[1]} features, but this estimator was fitted "
-                f"with {self.n_features_in_} features."
-            )
-        same_input = False
-        if X_checked.shape == self.X_fit_.shape:
-            if hasattr(X_checked, "tocsr") or hasattr(self.X_fit_, "tocsr"):
-                left = csr_matrix(X_checked).copy()
-                right = csr_matrix(self.X_fit_).copy()
-                left.sum_duplicates()
-                right.sum_duplicates()
-                left.eliminate_zeros()
-                right.eliminate_zeros()
-                same_input = (left != right).nnz == 0
-            else:
-                same_input = np.array_equal(X_checked, self.X_fit_)
-        if same_input:
-            return self.embedding_.copy()
-        raise ValueError(
-            "transform is available only for the original training rows in the "
-            "same order. Use imste.inductive.InductiveIMSTE to project new rows."
-        )
-
-    def _check_feature_names(self, X: object) -> None:
-        fitted_names = getattr(self, "feature_names_in_", None)
-        if fitted_names is None:
-            return
-        input_columns = getattr(X, "columns", None)
-        if input_columns is None:
-            raise ValueError(
-                "X must be a DataFrame with the same named columns used during fit."
-            )
-        input_names = np.asarray(input_columns, dtype=object)
-        if not np.array_equal(input_names, fitted_names):
-            raise ValueError(
-                "X must have the same feature names in the same order as during fit."
-            )

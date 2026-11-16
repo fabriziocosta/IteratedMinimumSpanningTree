@@ -167,9 +167,8 @@ def fit_density_gravity_layout(
             import leidenalg
         except ImportError as error:
             raise ImportError(
-                "Gravity needs RINND, igraph, and leidenalg. Install RINND with "
-                "`pip install 'imste[rinnd]'` and graph dependencies with "
-                "`pip install igraph leidenalg`."
+                "Gravity requires the project's core graph dependencies. Reinstall "
+                "the project with `python -m pip install .` and restart the kernel."
             ) from error
 
         graph_started = time.perf_counter()

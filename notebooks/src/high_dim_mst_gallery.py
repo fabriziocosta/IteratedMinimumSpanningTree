@@ -191,15 +191,11 @@ def _plot_dataset_examples(
     plt.close(fig)
 
 
-def _default_device() -> str:
-    return "auto"
-
-
 def run_high_dim_mst_gallery(
     *,
     max_samples: int = 1000,
     n_components: int = 2,
-    n_msts: int = 4,
+    n_msts: int = 15,
     n_epochs: int = 200,
     batch_size: int = 131072,
     learning_rate: float = 0.05,
@@ -209,8 +205,8 @@ def run_high_dim_mst_gallery(
     mst_inter_component_edges: int = 5,
     metric: str = "euclidean",
     include_knn_attraction: bool = False,
-    negative_ratio: int = 1,
-    mst_max_neighbors: int | None = 15,
+    negative_ratio: int = 5,
+    mst_max_neighbors: int | None = None,
     mst_representatives_per_component: int = 10,
     lambda_rep: float = 0.5,
     epsilon: float = 1e-4,
@@ -221,7 +217,7 @@ def run_high_dim_mst_gallery(
     sample_plot_rows: int = 2,
     plot_sample_images: bool = True,
     random_state: int = 42,
-    device: str | None = None,
+    device: str = "auto",
     verbose: bool = False,
     plot_embeddings: bool = True,
     multilevel_init: bool = True,
@@ -231,10 +227,10 @@ def run_high_dim_mst_gallery(
     gravity_neighbors: int = 15,
     gravity_resolution: float = 1.0,
     gravity_strength: float = 0.2,
-    mean_shift_neighbors: int = 50,
-    mean_shift_bandwidth_factor: float = 1.0,
-    mean_shift_step_size: float = 0.25,
-    mean_shift_iterations: int = 0,
+    mean_shift_neighbors: int = 100,
+    mean_shift_bandwidth_factor: float = 5.0,
+    mean_shift_step_size: float = 0.5,
+    mean_shift_iterations: int = 1,
 ) -> dict[str, object]:
     """Fit and display 2D IMSTE embeddings for several image datasets.
 
@@ -265,7 +261,7 @@ def run_high_dim_mst_gallery(
         or sample_plot_rows < 1
     ):
         raise ValueError("sample_plot_rows must be a positive integer.")
-    resolved_device = _default_device() if device is None else device
+    resolved_device = device
     datasets, load_errors = _load_datasets(max_samples, random_state)
 
     embeddings = {}

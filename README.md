@@ -25,13 +25,11 @@ python -m pip install ".[notebook]"
 
 Both estimators accept dense arrays and SciPy CSR matrices. The graph builders
 keep CSR inputs sparse. `InductiveIMSTE` densifies only each MLP mini-batch.
-The default FAMST graph builder prefers RINND for dense Euclidean inputs when
-RINND is installed. Otherwise it uses PyNNDescent on CPU or exact chunked
-nearest-neighbor search on MPS. Install the optional RINND backend with
-`python -m pip install 'imste[rinnd]'`. The neighbor-search backend can be
-selected independently from the optimizer's `device`; CSR inputs continue to
-use PyNNDescent. To use only the exact Prim builder, select
-`mst_method="prim"`.
+The default FAMST graph builder uses RINND for dense Euclidean inputs and
+PyNNDescent for sparse inputs. Both are core dependencies. The neighbor-search
+backend can be selected independently from the optimizer's `device`; on dense
+MPS inputs, exact chunked search is also available. To use only the exact Prim
+builder, select `mst_method="prim"`.
 
 For an existing sparse graph whose stored values are distances, use
 `fit_graph()` instead of passing the matrix to `fit()` (which treats rows as
@@ -330,6 +328,7 @@ library defaults; notebook recommendations can intentionally differ.
 | `gravity_resolution` | `1.0` | Leiden partition resolution |
 | `gravity_strength` | `0.2` | Attraction toward each density-weighted region core; set to `0` to disable gravity |
 | `mean_shift_iterations` | `1` | Number of mean-shift refinement iterations after gravity; set to `0` to disable mean shift |
+| `mean_shift_step_size` | `0.5` | Fraction of each mean-shift update applied per iteration |
 | `gravity_core_quantile` | `0.95` | Within-region density quantile defining the core points |
 | `gravity_mass_power` | `0.5` | Exponent controlling point and region mass effects |
 | `gravity_pack_regions` | `False` | After gravity, translate Leiden regions onto a compact ring while preserving each region's internal shape |
@@ -454,4 +453,4 @@ benchmark](notebooks/archive/mst_scaling_benchmark.ipynb).
 
 Python helper modules used by the notebooks are in [notebooks/src](notebooks/src/).
 For the full method description and equations, see the
-[IMSTE whitepaper](WHITEPAPER.md).
+[IMSTE whitepaper](docs/whitepaper.md).

@@ -20,6 +20,35 @@ from ._optimizer import (
 )
 
 
+def _complement_target_from_ordinal(
+    source: int,
+    adjacency_keys: np.ndarray,
+    n_samples: int,
+    ordinal: int,
+) -> int:
+    """Map a complement ordinal without allocating a length-n availability mask."""
+    start = int(source) * n_samples
+    first = int(np.searchsorted(adjacency_keys, start, side="left"))
+    last = int(np.searchsorted(adjacency_keys, start + n_samples, side="left"))
+    blocked_keys = adjacency_keys[first:last]
+    available_count = n_samples - 1 - len(blocked_keys)
+    if not 0 <= ordinal < available_count:
+        raise ValueError("ordinal must index an available non-neighbor.")
+
+    low, high = 0, n_samples - 1
+    while low < high:
+        middle = (low + high) // 2
+        blocked_through = int(
+            np.searchsorted(blocked_keys, start + middle, side="right")
+        )
+        available_through = middle + 1 - blocked_through - int(source <= middle)
+        if ordinal < available_through:
+            high = middle
+        else:
+            low = middle + 1
+    return low
+
+
 def _sample_negative_targets_torch(
     active_pairs: torch.Tensor,
     degree: torch.Tensor,
@@ -69,15 +98,10 @@ def _sample_negative_targets_torch(
         fallback_rng = np.random.RandomState(seed)
         fallback_targets = np.empty(len(failed_sources), dtype=np.int64)
         for fallback_index, source in enumerate(failed_sources):
-            start = int(source) * n_samples
-            first = np.searchsorted(adjacency_keys_cpu, start)
-            last = np.searchsorted(adjacency_keys_cpu, start + n_samples)
-            blocked = adjacency_keys_cpu[first:last] - start
-            available = np.ones(n_samples, dtype=bool)
-            available[int(source)] = False
-            available[blocked] = False
-            fallback_targets[fallback_index] = int(
-                fallback_rng.choice(np.flatnonzero(available))
+            available_count = n_samples - 1 - int(degree[int(source)])
+            ordinal = int(fallback_rng.randint(available_count))
+            fallback_targets[fallback_index] = _complement_target_from_ordinal(
+                int(source), adjacency_keys_cpu, n_samples, ordinal
             )
         targets_cpu = targets.cpu().numpy()
         targets_cpu[failed_positions_cpu] = fallback_targets
@@ -150,9 +174,12 @@ def optimize_embedding_torch(
     order = np.lexsort((target, source))
     source = source[order]
     target = target[order]
-    counts = np.bincount(source, minlength=n_samples)
-    degree = counts.astype(np.int64, copy=False)
-    adjacency_keys_cpu = source.astype(np.int64, copy=False) * n_samples + target
+    adjacency_keys_cpu = np.unique(
+        source.astype(np.int64, copy=False) * n_samples + target
+    )
+    degree = np.bincount(
+        adjacency_keys_cpu // n_samples, minlength=n_samples
+    ).astype(np.int64, copy=False)
 
     device = torch.device(device_type)
     coordinates = torch.as_tensor(embedding, dtype=torch.float32, device=device)

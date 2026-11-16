@@ -246,7 +246,7 @@ def test_explicit_rinnd_requires_compatible_install(monkeypatch):
     from imste.mst import famst
 
     monkeypatch.setattr(famst, "_rinnd_class", lambda: None)
-    with pytest.raises(ImportError, match="imste\\[rinnd\\]"):
+    with pytest.raises(ImportError, match="project dependencies"):
         famst._ann_edges_rinnd(np.zeros((5, 2)), 2, 1)
 
 

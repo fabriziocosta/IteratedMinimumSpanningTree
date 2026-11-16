@@ -373,8 +373,8 @@ def _ann_edges(
         from pynndescent import NNDescent
     except ImportError as exc:
         raise ImportError(
-            "mst_method='famst' requires the optional dependency. Install it with "
-            "`python -m pip install 'imste[famst]'`."
+            "mst_method='famst' requires PyNNDescent. Install the project dependencies "
+            "with `python -m pip install -e .`."
         ) from exc
 
     index = NNDescent(
@@ -428,8 +428,8 @@ def _ann_edges_rinnd(
     RINND = _rinnd_class()
     if RINND is None:
         raise ImportError(
-            "mst_neighbor_backend='rinnd' requires RINND >= 0.3.1. Install it "
-            "with `python -m pip install 'imste[rinnd]'`."
+            "mst_neighbor_backend='rinnd' requires RINND >= 0.3.1. Install the "
+            "project dependencies with `python -m pip install -e .`."
         )
 
     features = np.ascontiguousarray(X, dtype=np.float32)
@@ -853,6 +853,11 @@ def iterated_famst_edges(
             if graph_callback is not None
             else {}
         )
+        neighbor_graph_width_option = (
+            {"neighbor_graph_neighbors": neighbor_graph_neighbors}
+            if neighbor_graph_neighbors is not None
+            else {}
+        )
         dense_euclidean = not issparse(X) and metric == "euclidean"
         rinnd = _rinnd_class() if dense_euclidean else None
         use_rinnd = neighbor_backend == "rinnd" or (
@@ -865,13 +870,13 @@ def iterated_famst_edges(
                 seed,
                 verbose=progress_callback is not None,
                 **graph_callback_option,
-                neighbor_graph_neighbors=neighbor_graph_neighbors,
+                **neighbor_graph_width_option,
             )
         elif neighbor_backend == "pynndescent":
             candidate_edges = _ann_edges(
                 X, current_neighbors, seed,
                 **graph_callback_option,
-                neighbor_graph_neighbors=neighbor_graph_neighbors,
+                **neighbor_graph_width_option,
             )
         elif neighbor_backend == "mps_exact" or (
             neighbor_backend == "auto"
@@ -881,13 +886,13 @@ def iterated_famst_edges(
             candidate_edges = _ann_edges_mps(
                 X, current_neighbors, progress_callback=progress_callback,
                 **graph_callback_option,
-                neighbor_graph_neighbors=neighbor_graph_neighbors,
+                **neighbor_graph_width_option,
             )
         else:
             candidate_edges = _ann_edges(
                 X, current_neighbors, seed,
                 **graph_callback_option,
-                neighbor_graph_neighbors=neighbor_graph_neighbors,
+                **neighbor_graph_width_option,
             )
         local_neighbor_edges = None
         if candidate_edges_callback is not None:
