@@ -470,7 +470,7 @@ optimization by passing an `IteratedMinimumSpanningTreeEmbedder` as `embedder`.
 
 ## Notebooks
 
-Active experiment notebooks use concise dataset-based names. Dataset preparation notebooks live in their corresponding folders under `data/`.
+Active experiment notebooks use concise dataset-based names. Dataset setup notebooks live in `notebooks/dataset_setup/`.
 
 - [synthetic_exp](notebooks/synthetic_exp.ipynb): compare IMSTE and UMAP on controlled geometries.
 - [biological_exp](notebooks/biological_exp.ipynb): inspect annotated biological datasets and trajectories.
@@ -478,9 +478,9 @@ Active experiment notebooks use concise dataset-based names. Dataset preparation
 - [cifar10_exp](notebooks/cifar10_exp.ipynb): compare CIFAR-10 image-vector embeddings.
 - [interactive](notebooks/interactive.ipynb): interactively refine a balanced arXiv layout with gravity followed by mean shift.
 - [mnist_exp](notebooks/mnist_exp.ipynb): compare MNIST, Fashion-MNIST, and Kuzushiji-MNIST.
-- [tabula_sapiens_exp](notebooks/tabula_sapiens_exp.ipynb): compare tissue and cell-type colorings on shared layouts.
+- [tabula_sapiens_exp](notebooks/tabula_sapiens_exp.ipynb): load prepared Tabula Sapiens features and compare tissue and cell-type colorings on shared layouts.
 
-Prepare source data with [the arXiv preparation notebook](data/arxiv/prepare_dataset.ipynb) and [the CIFAR-10 preparation notebook](data/cifar10/prepare_dataset.ipynb).
+Prepare source data with the [arXiv](notebooks/dataset_setup/prepare_arxiv_dataset.ipynb), [CIFAR-10](notebooks/dataset_setup/prepare_cifar10_dataset.ipynb), and [Tabula Sapiens](notebooks/dataset_setup/prepare_tabula_sapiens_dataset.ipynb) setup notebooks.
 
 Earlier exploratory notebooks are in
 [notebooks/archive](notebooks/archive/). This includes the [interactive 2D
