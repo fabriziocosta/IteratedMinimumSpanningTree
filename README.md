@@ -160,10 +160,10 @@ positive edge contributes `negative_ratio`
 sampled non-neighbors from each eligible endpoint. The CPU Numba optimizer uses
 float32 coordinates, linear learning-rate decay, and recenters once per epoch.
 It rescales the mean objective by sample count to retain a useful per-coordinate
-SGD step size. The optional MPS backend applies each epoch's edge updates as a
-GPU batch, so its update trajectory differs from the sequential CPU optimizer.
-Fixed seeds reproduce CPU runs with the same implementation; MPS batch
-accumulation can introduce small floating-point differences. CPU and MPS
+SGD step size. The optional GPU backend applies each epoch's edge updates as a
+batch, so its update trajectory differs from the sequential CPU optimizer.
+Fixed seeds reproduce CPU runs with the same implementation; GPU batch
+accumulation can introduce small floating-point differences. CPU and GPU
 coordinates need not match each other or the former Adam optimizer.
 
 The default `mst_method="famst"` builds an approximate sparse graph. It can
@@ -287,13 +287,27 @@ error. The per-edge maximum and component pairs remain available for review.
 
 ## Parameters
 
+For the experiment notebooks, the main settings to adjust are:
+
+```python
+IMSTE_N_MSTS = 3
+IMSTE_N_EPOCHS = 200
+IMSTE_GRAVITY_STRENGTH = 0.2
+IMSTE_MEAN_SHIFT_ITERATIONS = 1
+```
+
+These set the number of MSTs, optimizer epochs, gravity strength, and mean-shift
+iterations. Keep the other IMSTE settings at their defaults unless a specific
+experiment calls for changing them. The table below lists the estimator's
+library defaults; notebook recommendations can intentionally differ.
+
 | Parameter | Default | Meaning |
 | --- | ---: | --- |
 | `n_msts` | `15` | Number of spanning-tree iterations; bottleneck edge reuse is penalized by incrementing its rank |
 | `n_components` | `2` | Embedding dimensions |
 | `pca_init` | `True` | Initialize `fit(X)` with PCA on feature-wise standardized inputs; extra PCA dimensions are zero-filled |
 | `pca_init_scaling` | `"global"` | Apply one uniform scale to fit all PCA coordinates into `[-1, 1]`, or use `"none"` to preserve raw magnitudes |
-| `multilevel_init` | `False` | Opt into rank-only graph coarsening and coarse-to-fine initialization |
+| `multilevel_init` | `True` | Use rank-only graph coarsening and coarse-to-fine initialization |
 | `multilevel_reduction_ratio` | `32` | Approximate number of nodes represented by each node per coarsening level |
 | `multilevel_base_size` | `512` | Stop coarsening at or below this graph size |
 | `multilevel_epochs` | `1` | Refinement epochs at each coarsened graph level |
@@ -315,6 +329,7 @@ error. The per-edge maximum and component pairs remain available for review.
 | `gravity_neighbors` | `15` | Feature-space neighbors for the RINND/Leiden region graph |
 | `gravity_resolution` | `1.0` | Leiden partition resolution |
 | `gravity_strength` | `0.2` | Attraction toward each density-weighted region core; set to `0` to disable gravity |
+| `mean_shift_iterations` | `1` | Number of mean-shift refinement iterations after gravity; set to `0` to disable mean shift |
 | `gravity_core_quantile` | `0.95` | Within-region density quantile defining the core points |
 | `gravity_mass_power` | `0.5` | Exponent controlling point and region mass effects |
 | `gravity_pack_regions` | `False` | After gravity, translate Leiden regions onto a compact ring while preserving each region's internal shape |
@@ -327,7 +342,7 @@ error. The per-edge maximum and component pairs remain available for review.
 Fitted estimators expose `graph_construction_time_`,
 `multilevel_initialization_time_`, `final_embedding_optimization_time_`,
 `embedding_optimization_time_`, and `fit_time_` in seconds. With `verbose=True`,
-the fit summary reports each macro phase separately. MPS negative sampling and
+the fit summary reports each macro phase separately. GPU negative sampling and
 coordinate updates are timed together to avoid per-batch Metal event recording
 on long fits.
 
@@ -370,7 +385,7 @@ group features when `pca_init=True` (the default). With `pca_init=False`, it
 uses seeded random coordinates instead. The layout then expands and refines
 the graph level by level. Coarse-level
 quotient edges use summed inverse-rank weights and run on the estimator's
-selected CPU or MPS optimizer. The final fit still uses the original graph and
+selected CPU or GPU optimizer. The final fit still uses the original graph and
 its normal rank scheduling. Explicit `init_coordinates` skip this process; if
 the graph cannot be reduced, the configured PCA or random initialization is
 used.
@@ -423,9 +438,8 @@ Active experiment notebooks use concise dataset-based names. Dataset preparation
 - [synthetic_exp](notebooks/synthetic_exp.ipynb): compare IMSTE and UMAP on controlled geometries.
 - [biological_exp](notebooks/biological_exp.ipynb): inspect annotated biological datasets and trajectories.
 - [arxiv_exp](notebooks/arxiv_exp.ipynb): compare embeddings of the prepared arXiv sample.
-- [arxiv_balanced_exp](notebooks/arxiv_balanced_exp.ipynb): run balanced embedding experiments.
 - [cifar10_exp](notebooks/cifar10_exp.ipynb): compare CIFAR-10 image-vector embeddings.
-- [arxiv_interactive_exp](notebooks/arxiv_interactive_exp.ipynb): interactively refine the layout with gravity followed by mean shift.
+- [interactive](notebooks/interactive.ipynb): interactively refine a balanced arXiv layout with gravity followed by mean shift.
 - [mnist_exp](notebooks/mnist_exp.ipynb): compare MNIST, Fashion-MNIST, and Kuzushiji-MNIST.
 - [tabula_sapiens_exp](notebooks/tabula_sapiens_exp.ipynb): compare tissue and cell-type colorings on shared layouts.
 

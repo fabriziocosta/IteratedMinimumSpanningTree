@@ -182,17 +182,7 @@ def load_gse52529_myoblasts(*, random_state=42, n_hvg=2000, n_pcs=50):
 def make_imste(**parameters):
     from imste import IteratedMinimumSpanningTreeEmbedder
 
-    defaults = {
-        "n_components": 2,
-        "n_msts": 5,
-        "n_epochs": 1000,
-        "mst_method": "famst",
-        "mst_neighbors": 15,
-        "random_state": 42,
-        "device": "cpu",
-    }
-    defaults.update(parameters)
-    return IteratedMinimumSpanningTreeEmbedder(**defaults)
+    return IteratedMinimumSpanningTreeEmbedder(**parameters)
 
 
 def make_umap(**parameters):

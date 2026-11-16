@@ -88,6 +88,33 @@ IMSTE fit by 5–14%. Trustworthiness increased on CIFAR-10 and MNIST, and fell
 by 0.0021 on the arXiv sample. One epoch keeps a refinement pass active at
 each multilevel stage while minimizing its time cost.
 
+## M5 Pro GPU batch-size sweep
+
+Batch sizes were compared on the actual notebook datasets with fixed FAMST
+graphs (3 trees, 15 starting neighbors), MPS optimization, negative ratio 1,
+and the same random seed. Each run optimized for 30 epochs; the table reports
+the median of two runs. Graph construction is excluded. The arXiv sample uses
+the notebook's 200,000-paper-per-domain cap (813,674 rows total); CIFAR-10 uses
+50,000 vectors; the MNIST notebook's three image datasets each use 60,000
+standardized rows.
+
+| Dataset | 32,768 | 65,536 | 131,072 | 262,144 | Fastest tested |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| arXiv | 12.76 s | 9.04 s | **8.51 s** | 9.26 s | 131,072 |
+| CIFAR-10 | 0.51 s | 0.44 s | 0.26 s | **0.24 s** | 262,144 |
+| MNIST | 0.43 s | 0.41 s | **0.35 s** | 0.43 s | 131,072 |
+| Fashion-MNIST | 0.48 s | 0.34 s | **0.26 s** | 0.28 s | 131,072 |
+| Kuzushiji-MNIST | 0.52 s | 0.38 s | **0.29 s** | 0.34 s | 131,072 |
+
+The shared estimator default is 131,072, the best setting across arXiv and all
+three MNIST datasets. The CIFAR-10 notebook uses 262,144, which was about 11%
+faster than 131,072 for its 50,000-row workload. The 262,144 setting was slower
+on arXiv and each MNIST variant. These short optimizer-only runs isolate batch
+size effects; full end-to-end times also include graph construction and other
+fit stages. An additional alternating five-run check on CIFAR-10 measured
+medians of 0.253 s at 131,072 and 0.230 s at 262,144, confirming a roughly 9%
+improvement for that setting.
+
 Reproduce with:
 
 ```sh
