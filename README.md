@@ -1,5 +1,7 @@
 # IMSTE
 
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.24307529.svg)](https://doi.org/10.5281/zenodo.24307529)
+
 **Iterated Minimum Spanning Tree Embedding (IMSTE)** is a scikit-learn
 transformer for learning low-dimensional coordinates from numeric data. It
 builds a weighted graph from ranked minimum spanning trees, then
