@@ -23,10 +23,6 @@ venv/
 !/data/arxiv/
 /data/arxiv/*
 !/data/arxiv/prepare_dataset.ipynb
-!/data/cifar10/
-/data/cifar10/*
-!/data/cifar10/prepare_dataset.ipynb
-/data/cifar10/raw/cifar-10-python.tar.gz
 *.npy
 *.npz
 *.parquet

@@ -67,7 +67,10 @@ def load_biological_datasets(*, data_dir=None, random_state=42, n_hvg=2000, n_pc
     missing = [path for path in (paul_path, pbmc_path, pbmc_annotated_path) if not path.is_file()]
     if missing:
         expected = ", ".join(str(path) for path in missing)
-        raise FileNotFoundError(f"Missing biological dataset file(s): {expected}")
+        raise FileNotFoundError(
+            f"Missing biological dataset file(s): {expected}. "
+            "Run notebooks/dataset_setup/prepare_biological_datasets.ipynb first."
+        )
 
     def dense_float32(matrix):
         if sparse.issparse(matrix):
@@ -141,10 +144,19 @@ def load_gse52529_myoblasts(*, random_state=42, n_hvg=2000, n_pcs=50):
         raise ValueError("n_hvg and n_pcs must be positive integers.")
 
     myoblast_dir = Path(__file__).resolve().parents[2] / "data" / "gse52529"
-    metadata = pd.read_csv(myoblast_dir / "GSE52529_cell_metadata.csv")
+    matrix_path = myoblast_dir / "GSE52529_fpkm_matrix.txt.gz"
+    metadata_path = myoblast_dir / "GSE52529_cell_metadata.csv"
+    missing = [path for path in (matrix_path, metadata_path) if not path.is_file()]
+    if missing:
+        expected = ", ".join(str(path) for path in missing)
+        raise FileNotFoundError(
+            f"Missing GSE52529 file(s): {expected}. "
+            "Run notebooks/dataset_setup/prepare_biological_datasets.ipynb first."
+        )
+    metadata = pd.read_csv(metadata_path)
     metadata = metadata.loc[metadata["include_clean_single_cell"].astype(bool)].reset_index(drop=True)
     expression = pd.read_csv(
-        myoblast_dir / "GSE52529_fpkm_matrix.txt.gz",
+        matrix_path,
         sep="\t",
         index_col=0,
         compression="gzip",
