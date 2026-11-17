@@ -27,11 +27,11 @@ The notebook uses all 60,000 MNIST training images, standardizes their 784 pixel
 
 ```python
 mapper = IteratedMinimumSpanningTreeEmbedder(
-    n_msts=32,
-    n_epochs=500,
+    n_msts=64,
+    n_epochs=900,
     mst_neighbors=15,
     gravity_strength=0.2,
-    mean_shift_iterations=2,
+    mean_shift_iterations=3,
     random_state=42,
     device="auto",
 )
@@ -97,11 +97,12 @@ from imste.visualization import plot_ellipses
 fig, ax = plot_ellipses(
     Z, obs, label_key="digit", k=5, cv_neighbors=5, cv_splits=5,
     random_state=42, point_size=9, point_alpha=0.45,
+    min_ellipse_area=0.03,
     legend_position="bottom",
 )
 ```
 
-To filter out small fitted ellipses, pass `min_ellipse_area` in squared embedding units (for example, `min_ellipse_area=0.1`). The default `0.0` keeps every fitted ellipse.
+`min_ellipse_area` filters small fitted ellipses by area in squared embedding units; the notebook uses `0.03`. Its default `0.0` keeps every fitted ellipse.
 
 ### `plot_density_parent_tree`
 
@@ -116,7 +117,7 @@ tree_rng = np.random.default_rng(42)
 tree_indices = np.sort(tree_rng.choice(len(Z), size=5_000, replace=False))
 fig, ax = plot_density_parent_tree(
     Z[tree_indices], obs.iloc[tree_indices], label_key="digit", k=30,
-    point_size=9, point_alpha=0.25, edge_alpha=0.45,
+    point_size=9, point_alpha=0.05, edge_alpha=0.75,
     cross_label_edge_alpha=0.08, legend_position="bottom",
 )
 ```
