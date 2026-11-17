@@ -129,6 +129,11 @@ class IteratedMinimumSpanningTreeEmbedder(
         to disable gravity. Gravity requires dense Euclidean features and at
         least two embedding dimensions; it refines the first two. It is skipped
         automatically when ``metric='cosine'``.
+    gravity_min_dist : float, default=0.0
+        Optional local-distance floor after gravity, expressed as a
+        fraction of the median pre-gravity nearest-neighbor distance among
+        feature-space neighbors. Zero disables repulsion. Values above 1 request
+        stronger expansion.
     gravity_neighbors : int, default=15
         Feature-space neighbors used to build gravity regions.
     gravity_resolution : float, default=1.0
@@ -212,6 +217,7 @@ class IteratedMinimumSpanningTreeEmbedder(
         gravity_neighbors: int = 15,
         gravity_resolution: float = 1.0,
         gravity_strength: float = 0.2,
+        gravity_min_dist: float = 0.0,
         gravity_core_quantile: float = 0.95,
         gravity_mass_power: float = 0.5,
         gravity_pack_regions: bool = False,
@@ -258,6 +264,7 @@ class IteratedMinimumSpanningTreeEmbedder(
         self.gravity_neighbors = gravity_neighbors
         self.gravity_resolution = gravity_resolution
         self.gravity_strength = gravity_strength
+        self.gravity_min_dist = gravity_min_dist
         self.gravity_core_quantile = gravity_core_quantile
         self.gravity_mass_power = gravity_mass_power
         self.gravity_pack_regions = gravity_pack_regions
@@ -330,9 +337,15 @@ class IteratedMinimumSpanningTreeEmbedder(
         gravity_strength = _finite_nonnegative(
             "gravity_strength", self.gravity_strength
         )
-        gravity_enabled = gravity_strength > 0.0 and self.metric == "euclidean"
+        gravity_min_dist = _finite_nonnegative(
+            "gravity_min_dist", self.gravity_min_dist
+        )
+        gravity_enabled = (
+            gravity_strength > 0.0 or gravity_min_dist > 0.0
+        ) and self.metric == "euclidean"
         if not gravity_enabled:
             gravity_strength = 0.0
+            gravity_min_dist = 0.0
         if gravity_enabled and n_components < 2:
             raise ValueError("gravity refinement requires n_components >= 2.")
         gravity_neighbors = _positive_integer(
@@ -460,6 +473,7 @@ class IteratedMinimumSpanningTreeEmbedder(
             "gravity_neighbors": gravity_neighbors,
             "gravity_resolution": gravity_resolution,
             "gravity_strength": gravity_strength,
+            "gravity_min_dist": gravity_min_dist,
             "gravity_core_quantile": gravity_core_quantile,
             "gravity_mass_power": gravity_mass_power,
             "gravity_pack_regions": bool(self.gravity_pack_regions),
@@ -868,6 +882,37 @@ class IteratedMinimumSpanningTreeEmbedder(
         self.mean_shift_time_ = time.perf_counter() - started
         self.mean_shift_iterations_ = int(diagnostics["iterations"])
 
+    def _apply_gravity_min_dist_floor(
+        self,
+        options: dict[str, object],
+        feature_neighbor_graph: tuple[np.ndarray, np.ndarray] | None,
+    ) -> None:
+        """Reapply the local spacing floor after all layout refinements."""
+        fraction = float(options["gravity_min_dist"])
+        if (
+            not options["gravity_enabled"]
+            or fraction == 0.0
+            or feature_neighbor_graph is None
+        ):
+            return
+
+        from ._gravity import _apply_local_distance_floor
+
+        started = time.perf_counter()
+        refined, diagnostics = _apply_local_distance_floor(
+            self.embedding_[:, :2],
+            feature_neighbor_graph[0],
+            fraction,
+            reference_embedding=self.embedding_before_gravity_[:, :2],
+        )
+        self.embedding_[:, :2] = refined
+        self.gravity_min_dist_used_ = float(diagnostics["min_dist_threshold"])
+        self.gravity_min_dist_reference_ = float(diagnostics["min_dist_reference"])
+        self.gravity_min_dist_pairs_adjusted_ = int(
+            diagnostics["min_dist_pairs_adjusted"]
+        )
+        self.gravity_time_ += time.perf_counter() - started
+
     def fit(self, X: object, y: object = None) -> "IteratedMinimumSpanningTreeEmbedder":
         """Fit the embedding and store coordinates for the input rows.
 
@@ -1000,7 +1045,7 @@ class IteratedMinimumSpanningTreeEmbedder(
                     "n_components", "n_msts", "resolved_device",
                     "mst_neighbor_backend", "include_knn_attraction",
                     "gravity_neighbors", "gravity_resolution",
-                    "gravity_strength", "gravity_core_quantile",
+                    "gravity_strength", "gravity_min_dist", "gravity_core_quantile",
                     "gravity_mass_power",
                     "gravity_pack_regions", "gravity_pack_radius_quantile",
                     "gravity_pack_gap_fraction",
@@ -1039,6 +1084,7 @@ class IteratedMinimumSpanningTreeEmbedder(
                 random_state=42 if self.random_state is None else self.random_state,
                 core_quantile=options["gravity_core_quantile"],
                 strength=options["gravity_strength"],
+                min_dist=0.0,
                 mass_power=options["gravity_mass_power"],
                 pack_regions=options["gravity_pack_regions"],
                 pack_radius_quantile=options["gravity_pack_radius_quantile"],
@@ -1054,6 +1100,11 @@ class IteratedMinimumSpanningTreeEmbedder(
             self.gravity_point_mass_ = gravity_diagnostics["point_mass"]
             self.gravity_region_count_ = int(gravity_diagnostics["region_count"])
             self.gravity_regions_packed_ = bool(gravity_diagnostics["regions_packed"])
+            self.gravity_min_dist_used_ = float(gravity_diagnostics["min_dist_threshold"])
+            self.gravity_min_dist_reference_ = float(gravity_diagnostics["min_dist_reference"])
+            self.gravity_min_dist_pairs_adjusted_ = int(
+                gravity_diagnostics["min_dist_pairs_adjusted"]
+            )
             self.gravity_graph_construction_time_ = float(
                 gravity_diagnostics["graph_seconds"]
             )
@@ -1068,6 +1119,9 @@ class IteratedMinimumSpanningTreeEmbedder(
         else:
             self.gravity_region_count_ = 0
             self.gravity_regions_packed_ = False
+            self.gravity_min_dist_used_ = 0.0
+            self.gravity_min_dist_reference_ = 0.0
+            self.gravity_min_dist_pairs_adjusted_ = 0
             self.gravity_graph_construction_time_ = 0.0
             self.gravity_neighbor_search_time_ = 0.0
             self.gravity_neighbor_graph_reused_ = False
@@ -1079,6 +1133,7 @@ class IteratedMinimumSpanningTreeEmbedder(
             if hasattr(self, "gravity_skipped_reason_"):
                 del self.gravity_skipped_reason_
         self._apply_mean_shift(options)
+        self._apply_gravity_min_dist_floor(options, feature_neighbor_graph)
         self.fit_time_ = time.perf_counter() - fit_started
         if self._progress_reporter is not None:
             self._progress_reporter.finish()

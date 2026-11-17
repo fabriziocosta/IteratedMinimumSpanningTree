@@ -141,6 +141,7 @@ class _EstimatorGraphMethods:
                 random_state=42 if self.random_state is None else self.random_state,
                 core_quantile=options["gravity_core_quantile"],
                 strength=options["gravity_strength"],
+                min_dist=0.0,
                 mass_power=options["gravity_mass_power"],
                 pack_regions=options["gravity_pack_regions"],
                 pack_radius_quantile=options["gravity_pack_radius_quantile"],
@@ -154,6 +155,11 @@ class _EstimatorGraphMethods:
             self.gravity_point_mass_ = diagnostics["point_mass"]
             self.gravity_region_count_ = int(diagnostics["region_count"])
             self.gravity_regions_packed_ = bool(diagnostics["regions_packed"])
+            self.gravity_min_dist_used_ = float(diagnostics["min_dist_threshold"])
+            self.gravity_min_dist_reference_ = float(diagnostics["min_dist_reference"])
+            self.gravity_min_dist_pairs_adjusted_ = int(
+                diagnostics["min_dist_pairs_adjusted"]
+            )
             self.gravity_graph_construction_time_ = float(diagnostics["graph_seconds"])
             self.gravity_neighbor_search_time_ = float(diagnostics["neighbor_search_seconds"])
             self.gravity_neighbor_graph_reused_ = bool(diagnostics["neighbor_graph_reused"])
@@ -164,6 +170,9 @@ class _EstimatorGraphMethods:
         else:
             self.gravity_region_count_ = 0
             self.gravity_regions_packed_ = False
+            self.gravity_min_dist_used_ = 0.0
+            self.gravity_min_dist_reference_ = 0.0
+            self.gravity_min_dist_pairs_adjusted_ = 0
             self.gravity_graph_construction_time_ = 0.0
             self.gravity_neighbor_search_time_ = 0.0
             self.gravity_neighbor_graph_reused_ = False
@@ -179,6 +188,7 @@ class _EstimatorGraphMethods:
                 if hasattr(self, name):
                     delattr(self, name)
         self._apply_mean_shift(options)
+        self._apply_gravity_min_dist_floor(options, feature_neighbor_graph)
         self.fit_time_ = time.perf_counter() - fit_started
         if self._progress_reporter is not None:
             self._progress_reporter.finish()

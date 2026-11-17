@@ -369,6 +369,7 @@ library defaults; notebook recommendations can intentionally differ.
 | `gravity_neighbors` | `15` | Feature-space neighbors for the RINND/Leiden region graph |
 | `gravity_resolution` | `1.0` | Leiden partition resolution |
 | `gravity_strength` | `0.2` | Attraction toward each density-weighted region core; set to `0` to disable gravity; skipped automatically with `metric="cosine"` |
+| `gravity_min_dist` | `0.0` | Local repulsion floor after gravity, as a fraction of the median pre-gravity nearest-neighbor distance; `0` disables it and values above `1` request stronger expansion |
 | `mean_shift_iterations` | `1` | Number of mean-shift refinement iterations after gravity; set to `0` to disable mean shift |
 | `mean_shift_step_size` | `0.5` | Fraction of each mean-shift update applied per iteration |
 | `gravity_core_quantile` | `0.95` | Within-region density quantile defining the core points |

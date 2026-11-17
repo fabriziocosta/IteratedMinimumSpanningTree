@@ -489,7 +489,7 @@ def prepare_arxiv_projection_cache(
     ]
     projection_settings = {
         # Bump when sequential gravity / mean-shift semantics change.
-        "cache_schema": 5,
+        "cache_schema": 6,
         "data_id": dataset_id,
         "metric": metric,
         "umap": umap_key,
@@ -499,6 +499,7 @@ def prepare_arxiv_projection_cache(
                 "gravity_neighbors": 15,
                 "gravity_resolution": 1.0,
                 "gravity_strength": 0.2,
+                "gravity_min_dist": 0.0,
             }.items()
         },
         "mean_shift": {

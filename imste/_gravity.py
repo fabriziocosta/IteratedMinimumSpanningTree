@@ -112,6 +112,99 @@ def _compatible_neighbor_graph(
     return selected_indices, selected_distances.astype(np.float32, copy=False)
 
 
+def _apply_local_distance_floor(
+    embedding: np.ndarray,
+    neighbor_indices: np.ndarray,
+    min_dist_fraction: float,
+    *,
+    reference_embedding: np.ndarray | None = None,
+    iterations: int = 32,
+) -> tuple[np.ndarray, dict[str, float | int]]:
+    """Repel too-close pairs on the feature-neighbor graph after gravity.
+
+    The distance floor is iteratively relaxed over the local graph. More sweeps
+    help points satisfy several neighbor constraints at once, especially for
+    larger requested floors.
+    """
+    coordinates = np.asarray(embedding, dtype=np.float64)
+    reference = (
+        coordinates
+        if reference_embedding is None
+        else np.asarray(reference_embedding, dtype=np.float64)
+    )
+    if reference.shape != coordinates.shape:
+        raise ValueError("reference_embedding must match embedding shape.")
+    n_samples = len(coordinates)
+    rows = np.repeat(np.arange(n_samples, dtype=np.int64), neighbor_indices.shape[1])
+    columns = np.asarray(neighbor_indices, dtype=np.int64).reshape(-1)
+    valid = (columns >= 0) & (columns < n_samples) & (columns != rows)
+    rows, columns = rows[valid], columns[valid]
+    if not len(rows):
+        return coordinates, {
+            "min_dist_reference": 0.0,
+            "min_dist_threshold": 0.0,
+            "min_dist_pairs_adjusted": 0,
+        }
+
+    base_distance = np.linalg.norm(reference[rows] - reference[columns], axis=1)
+    nearest_distance = np.full(n_samples, np.inf, dtype=np.float64)
+    np.minimum.at(nearest_distance, rows, base_distance)
+    positive_nearest = nearest_distance[
+        np.isfinite(nearest_distance) & (nearest_distance > 0)
+    ]
+    if not len(positive_nearest):
+        return coordinates, {
+            "min_dist_reference": 0.0,
+            "min_dist_threshold": 0.0,
+            "min_dist_pairs_adjusted": 0,
+        }
+    reference_distance = float(np.median(positive_nearest))
+    threshold = float(min_dist_fraction * reference_distance)
+
+    pairs = np.unique(np.sort(np.column_stack((rows, columns)), axis=1), axis=0)
+    left, right = pairs[:, 0], pairs[:, 1]
+    result = coordinates.copy()
+    ever_adjusted = np.zeros(len(pairs), dtype=bool)
+    for _ in range(iterations):
+        delta = result[left] - result[right]
+        distance = np.linalg.norm(delta, axis=1)
+        shortfall = np.maximum(threshold - distance, 0.0)
+        active = shortfall > 0
+        if not np.any(active):
+            break
+        ever_adjusted |= active
+
+        direction = np.zeros_like(delta)
+        nonzero = distance > 1e-12
+        direction[nonzero] = delta[nonzero] / distance[nonzero, None]
+        if np.any(~nonzero & active):
+            coincident = ~nonzero & active
+            angles = np.mod(
+                left[coincident] * 12.9898 + right[coincident] * 78.233,
+                2 * np.pi,
+            )
+            direction[coincident, 0] = np.cos(angles)
+            direction[coincident, 1] = np.sin(angles)
+
+        correction = 0.5 * shortfall[:, None] * direction
+        displacement = np.zeros_like(result)
+        degree = np.zeros(n_samples, dtype=np.float64)
+        np.add.at(displacement, left[active], correction[active])
+        np.add.at(displacement, right[active], -correction[active])
+        np.add.at(degree, left[active], 1.0)
+        np.add.at(degree, right[active], 1.0)
+        has_correction = degree > 0
+        result[has_correction] += (
+            displacement[has_correction] / degree[has_correction, None]
+        )
+
+    return result, {
+        "min_dist_reference": reference_distance,
+        "min_dist_threshold": threshold,
+        "min_dist_pairs_adjusted": int(ever_adjusted.sum()),
+    }
+
+
 def density_gravity_layout(
     features: object,
     embedding: object,
@@ -121,6 +214,7 @@ def density_gravity_layout(
     random_state: int = 42,
     core_quantile: float = 0.95,
     strength: float = 0.2,
+    min_dist: float = 0.0,
     mass_power: float = 0.5,
     pack_regions: bool = False,
     pack_radius_quantile: float = 0.9,
@@ -132,13 +226,17 @@ def density_gravity_layout(
 
     A compatible Euclidean feature-neighbor graph is reused when supplied;
     otherwise RINND builds one. Leiden finds weighted density regions, then
-    points move toward density-weighted region cores. No labels or notebook
-    state are used.
+    points move toward density-weighted region cores. An optional local
+    distance floor then separates feature-neighbor pairs whose 2D distances
+    fall below ``min_dist`` times their median pre-gravity nearest-neighbor
+    distance. No labels or notebook state are used.
     """
     from scipy.sparse import issparse
 
     if not isinstance(pack_regions, (bool, np.bool_)):
         raise ValueError("pack_regions must be a boolean.")
+    if not np.isfinite(min_dist) or min_dist < 0.0:
+        raise ValueError("min_dist must be finite and nonnegative.")
     if issparse(features):
         raise ValueError("gravity refinement currently requires dense features.")
     X = np.asarray(features, dtype=np.float32)
@@ -149,7 +247,7 @@ def density_gravity_layout(
         raise ValueError("features and embedding must contain only finite values.")
     if not 1 <= int(neighbors) < len(X):
         raise ValueError("neighbors must be in [1, n_samples).")
-    if float(strength) == 0.0:
+    if float(strength) == 0.0 and float(min_dist) == 0.0:
         return coordinates.astype(np.float32), {
             "membership": np.zeros(len(X), dtype=np.int32),
             "point_mass": np.ones(len(X), dtype=np.float32),
@@ -159,6 +257,9 @@ def density_gravity_layout(
             "neighbor_graph_reused": feature_neighbor_graph is not None,
             "force_seconds": 0.0,
             "regions_packed": False,
+            "min_dist_reference": 0.0,
+            "min_dist_threshold": 0.0,
+            "min_dist_pairs_adjusted": 0,
         }
 
     try:
@@ -277,6 +378,9 @@ def density_gravity_layout(
             radius_quantile=pack_radius_quantile,
             gap_fraction=pack_gap_fraction,
         )
+    result, min_dist_diagnostics = _apply_local_distance_floor(
+        result, indices, float(min_dist), reference_embedding=coordinates
+    )
     result = np.asarray(result, dtype=np.float64)
     result -= result.mean(axis=0)
     result = result.astype(np.float32)
@@ -292,4 +396,5 @@ def density_gravity_layout(
         "neighbor_graph_reused": neighbor_graph_reused,
         "force_seconds": force_seconds,
         "regions_packed": bool(pack_regions and region_count > 1),
+        **min_dist_diagnostics,
     }

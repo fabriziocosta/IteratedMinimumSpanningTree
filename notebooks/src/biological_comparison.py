@@ -9,6 +9,13 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from single_cell_preprocessing import (
+    filter_count_data,
+    normalize_log1p,
+    scale_and_pca,
+    select_hvgs_scanpy,
+)
+
 
 def align_by_axis_flips(reference, candidate):
     """Apply the best signed axis permutation from the eight 2D symmetries."""
@@ -93,26 +100,23 @@ def load_biological_datasets(*, data_dir=None, random_state=42, n_hvg=2000, n_pc
     if unknown_clusters:
         raise ValueError(f"No developmental-stage annotation for Paul15 clusters: {sorted(unknown_clusters)}")
     paul_stages = np.asarray([stage_by_cluster[label] for label in paul_labels])
-    sc.pp.normalize_total(paul, target_sum=1e4)
-    sc.pp.log1p(paul)
-    sc.pp.highly_variable_genes(paul, n_top_genes=n_hvg, flavor="seurat", subset=True)
-    sc.pp.scale(paul, max_value=10)
-    sc.pp.pca(paul, n_comps=n_pcs, random_state=random_state)
-    paul_X = dense_float32(paul.obsm["X_pca"])
+    normalize_log1p(paul, target_sum=1e4)
+    paul_hvg = select_hvgs_scanpy(paul, n_top_genes=n_hvg)
+    paul_X = dense_float32(scale_and_pca(
+        paul_hvg, n_pcs=n_pcs, random_state=random_state, max_value=10
+    ))
 
     pbmc = sc.read_h5ad(pbmc_path)
     pbmc_annotated = sc.read_h5ad(pbmc_annotated_path)
-    sc.pp.filter_cells(pbmc, min_genes=200)
-    sc.pp.filter_genes(pbmc, min_cells=3)
+    pbmc = filter_count_data(pbmc, min_genes_per_cell=200, min_cells_per_gene=3)
     common = pbmc.obs_names[pbmc.obs_names.isin(pbmc_annotated.obs_names)]
     pbmc = pbmc[common].copy()
     pbmc_labels = pbmc_annotated.obs.loc[common, "louvain"].astype(str).to_numpy()
-    sc.pp.normalize_total(pbmc, target_sum=1e4)
-    sc.pp.log1p(pbmc)
-    sc.pp.highly_variable_genes(pbmc, n_top_genes=n_hvg, flavor="seurat", subset=True)
-    sc.pp.scale(pbmc, max_value=10)
-    sc.pp.pca(pbmc, n_comps=n_pcs, random_state=random_state)
-    pbmc_X = dense_float32(pbmc.obsm["X_pca"])
+    normalize_log1p(pbmc, target_sum=1e4)
+    pbmc_hvg = select_hvgs_scanpy(pbmc, n_top_genes=n_hvg)
+    pbmc_X = dense_float32(scale_and_pca(
+        pbmc_hvg, n_pcs=n_pcs, random_state=random_state, max_value=10
+    ))
 
     return {
         "Paul15 myeloid progenitors": {
@@ -168,17 +172,16 @@ def load_gse52529_myoblasts(*, random_state=42, n_hvg=2000, n_pcs=50):
     )
     # GEO supplies normalized FPKM values, so do not apply count-based
     # library-size normalization here.
-    sc.pp.log1p(adata)
-    sc.pp.highly_variable_genes(
-        adata, n_top_genes=min(n_hvg, adata.n_vars), flavor="seurat", subset=True
+    normalize_log1p(adata, target_sum=None)
+    adata = select_hvgs_scanpy(adata, n_top_genes=n_hvg)
+    myoblast_pcs = scale_and_pca(
+        adata, n_pcs=n_pcs, random_state=random_state, max_value=10
     )
-    sc.pp.scale(adata, max_value=10)
-    sc.pp.pca(adata, n_comps=n_pcs, random_state=random_state)
 
     time_hours = adata.obs["time_hours"].to_numpy(dtype=int)
     stages = np.asarray([f"{hour} h" for hour in time_hours])
     return {
-        "X": np.asarray(adata.obsm["X_pca"], dtype=np.float32),
+        "X": myoblast_pcs,
         "labels": stages,
         "stage_labels": stages,
         "stage_order": [f"{hour} h" for hour in sorted(np.unique(time_hours))],
