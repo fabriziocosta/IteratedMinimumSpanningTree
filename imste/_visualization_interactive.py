@@ -406,6 +406,7 @@ def _add_compound_path_union_outline(
     linewidth: float = 1.0,
     alpha: float = 0.95,
     draw_outline: bool = True,
+    zorder: float = 2,
 ):
     """Draw only the exterior outline of a compound polygon path.
 
@@ -449,5 +450,6 @@ def _add_compound_path_union_outline(
             levels=(0.5,),
             colors=[(*color[:3], alpha)],
             linewidths=linewidth,
+            zorder=zorder,
         )
     return component_labels, n_components, x_grid, y_grid

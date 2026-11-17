@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+import warnings
 
 import numpy as np
 import pandas as pd
@@ -38,7 +39,17 @@ def _fit_class_mixture_nodes(
                 reg_covar=1e-5,
                 n_init=3,
                 random_state=random_state + class_code,
-            ).fit(embedding[sample_indices])
+            )
+            with warnings.catch_warnings():
+                warnings.filterwarnings(
+                    "ignore",
+                    message=(
+                        r"(divide by zero|overflow|invalid value) "
+                        r"encountered in matmul"
+                    ),
+                    category=RuntimeWarning,
+                )
+                mixture.fit(embedding[sample_indices])
             component_ids = mixture.predict(embedding[sample_indices])
             counts = np.bincount(component_ids, minlength=n_components)
             if n_components == 1 or counts.min() >= min_component_size:

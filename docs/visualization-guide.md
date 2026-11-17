@@ -23,11 +23,17 @@ python -m pip install "imste[notebook]"
 
 ## The embedding used throughout
 
-The notebook selects 50 examples per digit with a fixed random seed, standardizes the pixel features, and fits a single 2D IMSTE layout. Its starter cell is:
+The notebook uses all 60,000 MNIST training images, standardizes their 784 pixel features, and fits one 2D IMSTE layout. The labels are used only for coloring and post-fit evaluation. Its settings are:
 
 ```python
 mapper = IteratedMinimumSpanningTreeEmbedder(
-    n_msts=3, n_epochs=25, random_state=42, mst_neighbors=12
+    n_msts=32,
+    n_epochs=500,
+    mst_neighbors=15,
+    gravity_strength=0.2,
+    mean_shift_iterations=2,
+    random_state=42,
+    device="auto",
 )
 Z = mapper.fit_transform(X)
 ```
@@ -43,7 +49,9 @@ Use this as the reference view. It accepts a label vector, Series, or metadata D
 ```python
 from imste.visualization import plot_embedding
 
-fig, axes = plot_embedding(Z, obs, label_key="digit")
+fig, axes = plot_embedding(
+    Z, obs, label_key="digit", point_size=10, point_alpha=0.8
+)
 ```
 
 ### `render_datashader_embedding`
@@ -55,7 +63,10 @@ Datashader rasterizes point density or categories into an image. It helps when a
 ```python
 from imste.visualization import render_datashader_embedding
 
-image = render_datashader_embedding(Z, obs, label_key="digit", width=1000, height=800)
+image = render_datashader_embedding(
+    Z, obs, label_key="digit", width=1000, height=800,
+    preserve_aspect=True, how="eq_hist", spread_px=1, min_alpha=60,
+)
 image.to_pil()  # display or save with Pillow
 ```
 
@@ -68,7 +79,10 @@ This plot outlines cross-validated local neighborhoods whose samples share a lab
 ```python
 from imste.visualization import plot_knn_union
 
-fig, ax = plot_knn_union(Z, obs, label_key="digit", k=5, cv_splits=5)
+fig, ax = plot_knn_union(
+    Z, obs, label_key="digit", k=30, cv_neighbors=5, cv_splits=5,
+    random_state=42, legend_position="bottom",
+)
 ```
 
 ### `plot_ellipses`
@@ -80,8 +94,14 @@ Ellipses summarize selected local regions. They provide a compact view of spread
 ```python
 from imste.visualization import plot_ellipses
 
-fig, ax = plot_ellipses(Z, obs, label_key="digit", k=5, cv_splits=5)
+fig, ax = plot_ellipses(
+    Z, obs, label_key="digit", k=5, cv_neighbors=5, cv_splits=5,
+    random_state=42, point_size=9, point_alpha=0.45,
+    legend_position="bottom",
+)
 ```
+
+To filter out small fitted ellipses, pass `min_ellipse_area` in squared embedding units (for example, `min_ellipse_area=0.1`). The default `0.0` keeps every fitted ellipse.
 
 ### `plot_density_parent_tree`
 
@@ -92,7 +112,13 @@ This plot links observations toward nearby points with higher estimated density.
 ```python
 from imste.visualization import plot_density_parent_tree
 
-fig, ax = plot_density_parent_tree(Z, obs, label_key="digit", k=30)
+tree_rng = np.random.default_rng(42)
+tree_indices = np.sort(tree_rng.choice(len(Z), size=5_000, replace=False))
+fig, ax = plot_density_parent_tree(
+    Z[tree_indices], obs.iloc[tree_indices], label_key="digit", k=30,
+    point_size=9, point_alpha=0.25, edge_alpha=0.45,
+    cross_label_edge_alpha=0.08, legend_position="bottom",
+)
 ```
 
 ### `plot_class_mixture_mst`
@@ -104,8 +130,10 @@ This helper fits Gaussian mixture components within each class and connects comp
 ```python
 from imste.visualization import plot_class_mixture_mst
 
-fig, axes, edge_scores = plot_class_mixture_mst(
-    X, y, {"IMSTE": Z}, n_msts=2, max_components_per_class=2
+fig, axes, class_edges = plot_class_mixture_mst(
+    X, y, {"IMSTE": Z}, title="Class-mixture graph on MNIST",
+    n_msts=2, max_components_per_class=2,
+    min_component_size=12, random_state=42,
 )
 ```
 
@@ -114,6 +142,8 @@ fig, axes, edge_scores = plot_class_mixture_mst(
 In a Jupyter notebook, this widget lets you adjust same-label attraction, different-label repulsion, neighborhood size, and how much of the adjusted layout to show. It starts from the fitted coordinates and does not refit IMSTE.
 
 ![Starting layout shown by the interactive force example](images/visualization-interactive-force.png)
+
+The notebook starts with `initial_k=8`, `initial_iterations=30`, and `initial_distance_fraction=0.3`; the controls allow up to `max_k=30` and `max_iterations=120`, with `point_size=9`.
 
 Run the interactive cell in the [notebook](../notebooks/visualization_guide.ipynb) to use the live controls.
 
@@ -128,9 +158,13 @@ This helper is an evaluation function rather than a plot. It runs stratified cro
 ```python
 from imste.visualization import cross_validate_embedding_knn
 
-scores = cross_validate_embedding_knn(Z, obs, label_key="digit", n_neighbors=5)
+scores = cross_validate_embedding_knn(
+    Z, obs, label_key="digit", n_neighbors=5, n_splits=5, random_state=42
+)
 print(scores["accuracy"], scores["balanced_accuracy"])
 ```
+
+The notebook uses the same `n_neighbors=5`, `n_splits=5`, and `random_state=42` settings for its confusion matrix.
 
 ## Run the complete example
 

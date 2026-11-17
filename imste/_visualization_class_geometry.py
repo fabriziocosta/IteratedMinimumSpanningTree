@@ -7,6 +7,7 @@ visualization dependencies. Import this module only in visualization workflows.
 from __future__ import annotations
 
 from html import escape as html_escape
+import warnings
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -68,7 +69,17 @@ def _fit_component_ellipses(
                 n_clusters=n_ellipses,
                 n_init=10,
                 random_state=random_state,
-            ).fit(sample)
+            )
+            with warnings.catch_warnings():
+                warnings.filterwarnings(
+                    "ignore",
+                    message=(
+                        r"(divide by zero|overflow|invalid value) "
+                        r"encountered in matmul"
+                    ),
+                    category=RuntimeWarning,
+                )
+                model.fit(sample)
             sample_labels = model.labels_
             centers = model.cluster_centers_
 
@@ -146,6 +157,7 @@ def _render_class_neighborhood_geometry(
     ellipse_max_per_patch: int = 3,
     ellipse_min_precision: float = 0.65,
     ellipse_min_recall: float = 0.8,
+    ellipse_min_area: float = 0.0,
     legend_position: str | None = None,
     draw_union: bool = True,
 ):
@@ -192,6 +204,8 @@ def _render_class_neighborhood_geometry(
         raise ValueError("ellipse_max_per_patch must be a positive integer.")
     if not 0 <= ellipse_min_precision <= 1 or not 0 <= ellipse_min_recall <= 1:
         raise ValueError("ellipse precision and recall thresholds must be in [0, 1].")
+    if not np.isfinite(ellipse_min_area) or ellipse_min_area < 0:
+        raise ValueError("ellipse_min_area must be non-negative and finite.")
     if color_key not in obs:
         raise KeyError(f"Color column {color_key!r} is not present in obs.")
 
@@ -319,6 +333,7 @@ def _render_class_neighborhood_geometry(
     if class_counts:
         min_count, max_count = min(class_counts), max(class_counts)
         for _, category, color, compound_path, n_cells in class_patches:
+            ellipse_edge_color = tuple(channel * 0.65 for channel in color[:3])
             if min_count == max_count:
                 patch_alpha = (alpha_range[0] + alpha_range[1]) / 2
             else:
@@ -364,7 +379,7 @@ def _render_class_neighborhood_geometry(
                     pixel_area = (
                         (x_grid[1] - x_grid[0]) * (y_grid[1] - y_grid[0])
                     )
-                    fitted, split_count, _, _ = _fit_component_ellipses(
+                    fitted, _, _, _ = _fit_component_ellipses(
                         component_points,
                         pixel_area=pixel_area,
                         n_std=ellipse_n_std,
@@ -373,6 +388,13 @@ def _render_class_neighborhood_geometry(
                         min_recall=ellipse_min_recall,
                         random_state=cv_random_state,
                     )
+                    fitted = [
+                        ellipse
+                        for ellipse in fitted
+                        if np.pi * ellipse[1] * ellipse[2] / 4
+                        >= ellipse_min_area
+                    ]
+                    split_count = len(fitted)
                     if split_count > 1:
                         n_split_patches += 1
                         split_patches_by_class[category] = (
@@ -394,15 +416,16 @@ def _render_class_neighborhood_geometry(
                                     ellipse_union_path,
                                     facecolor=(*color[:3], 0.12),
                                     edgecolor="none",
-                                    zorder=1,
+                                    zorder=4,
                                 )
                             )
                             _add_compound_path_union_outline(
                                 target_ax,
                                 ellipse_union_path,
-                                color,
+                                ellipse_edge_color,
                                 linewidth=1.2,
                                 alpha=0.9,
+                                zorder=5,
                             )
                     else:
                         for center, width, height, angle in fitted:
@@ -414,9 +437,9 @@ def _render_class_neighborhood_geometry(
                                         height=height,
                                         angle=angle,
                                         facecolor=(*color[:3], 0.12),
-                                        edgecolor=(*color[:3], 0.9),
+                                        edgecolor=(*ellipse_edge_color, 0.9),
                                         linewidth=1.2,
-                                        zorder=1,
+                                        zorder=5,
                                     )
                                 )
                     if fitted:
@@ -426,7 +449,7 @@ def _render_class_neighborhood_geometry(
                     ellipse_legend_handles.append(
                         Patch(
                             facecolor=(*color[:3], 0.12),
-                            edgecolor=(*color[:3], 0.9),
+                            edgecolor=(*ellipse_edge_color, 0.9),
                             linewidth=1.2,
                             label=str(category),
                         )
@@ -571,12 +594,17 @@ def plot_ellipses(
     max_ellipses_per_region: int = 3,
     min_precision: float = 0.65,
     min_recall: float = 0.8,
+    min_ellipse_area: float = 0.0,
     point_size: float = 7,
     point_alpha: float = 0.5,
     ax=None,
     legend_position: str | None = None,
 ):
-    """Render ellipses for array or fitted IMSTE coordinates and aligned labels."""
+    """Render ellipses for array or fitted IMSTE coordinates and aligned labels.
+
+    ``min_ellipse_area`` filters fitted ellipses by area in squared embedding
+    units. Its default of zero keeps every fitted ellipse.
+    """
     obs, label_key = _as_observations(labels, label_key)
     if ax is None:
         fig, ax = plt.subplots(figsize=(8, 7))
@@ -607,6 +635,7 @@ def plot_ellipses(
         ellipse_max_per_patch=max_ellipses_per_region,
         ellipse_min_precision=min_precision,
         ellipse_min_recall=min_recall,
+        ellipse_min_area=min_ellipse_area,
         legend_position=legend_position,
         draw_union=False,
     )
