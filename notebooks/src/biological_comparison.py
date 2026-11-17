@@ -362,7 +362,7 @@ def plot_cell_fate_stages(datasets, embeddings, *, point_size=10, point_alpha=0.
 
 def plot_biological_class_graphs(datasets, embeddings, *, point_alpha=0.4, random_state=42):
     import matplotlib.pyplot as plt
-    from imste.class_graph import plot_class_mixture_mst
+    from imste.visualization import plot_class_mixture_mst
 
     figures = {}
     tables = []

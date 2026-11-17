@@ -308,7 +308,7 @@ directly; they use `embedding_` or the inductive model's `reference_embedding_`.
 Raw coordinate arrays remain supported.
 
 For class-level graph overlays across one or more embeddings, use
-`imste.class_graph.plot_class_mixture_mst`. It fits full-covariance Gaussian
+`imste.visualization.plot_class_mixture_mst`. It fits full-covariance Gaussian
 mixtures per class in each 2D embedding, connects their component centers with
 iterated MSTs, and maps symmetric cross-component posterior probability to
 edge opacity. For each edge, the two endpoint Gaussian densities form an

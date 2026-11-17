@@ -19,10 +19,12 @@ from ._visualization_class_geometry import (
     plot_ellipses,
     plot_knn_union,
 )
+from ._visualization_class_graph import plot_class_mixture_mst
 
 __all__ = [
     "cross_validate_embedding_knn",
     "interactive_force",
+    "plot_class_mixture_mst",
     "plot_density_parent_tree",
     "plot_ellipses",
     "plot_embedding",
