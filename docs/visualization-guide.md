@@ -153,7 +153,9 @@ Run the interactive cell in the [notebook](../notebooks/visualization_guide.ipyn
 
 This helper is an evaluation function rather than a plot. It runs stratified cross-validation using only the 2D coordinates and returns accuracy, balanced accuracy, predictions, and a confusion matrix. A high score means labels are locally predictable in this embedding; it does not establish that the embedding preserves every meaningful relationship in the original data.
 
-![Five-fold kNN confusion matrix in the 2D embedding](images/visualization-knn-cross-validation.png)
+The confusion matrix is row-normalized: each cell is the fraction of examples for that true digit assigned to each predicted digit, so each row sums to 1.
+
+![Five-fold kNN confusion matrix shown as row fractions in the 2D embedding](images/visualization-knn-cross-validation.png)
 
 ```python
 from imste.visualization import cross_validate_embedding_knn
@@ -162,9 +164,11 @@ scores = cross_validate_embedding_knn(
     Z, obs, label_key="digit", n_neighbors=5, n_splits=5, random_state=42
 )
 print(scores["accuracy"], scores["balanced_accuracy"])
+confusion = scores["confusion_matrix"]  # raw counts returned by the helper
+row_fractions = confusion / confusion.sum(axis=1, keepdims=True)
 ```
 
-The notebook uses the same `n_neighbors=5`, `n_splits=5`, and `random_state=42` settings for its confusion matrix.
+The notebook uses the same `n_neighbors=5`, `n_splits=5`, and `random_state=42` settings. It displays `row_fractions` with a fixed color scale from 0 to 1 and labels each cell to two decimal places.
 
 ## Run the complete example
 

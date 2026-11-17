@@ -45,12 +45,12 @@ def _fit_class_mixture_nodes(
                     "ignore",
                     message=(
                         r"(divide by zero|overflow|invalid value) "
-                        r"encountered in matmul"
+                        r"encountered in (matmul|vecdot)"
                     ),
                     category=RuntimeWarning,
                 )
                 mixture.fit(embedding[sample_indices])
-            component_ids = mixture.predict(embedding[sample_indices])
+                component_ids = mixture.predict(embedding[sample_indices])
             counts = np.bincount(component_ids, minlength=n_components)
             if n_components == 1 or counts.min() >= min_component_size:
                 break
@@ -92,30 +92,39 @@ def _edge_component_overlap(
     indices_b = np.asarray(node_b["sample_indices"], dtype=np.intp)
     covariance_a = np.asarray(node_a["covariance"])
     covariance_b = np.asarray(node_b["covariance"])
-    log_density_a_on_b = multivariate_normal.logpdf(
-        np.asarray(node_b["sample_coordinates"]),
-        mean=np.asarray(node_a["position"]),
-        cov=covariance_a,
-        allow_singular=True,
-    )
-    log_density_b_on_b = multivariate_normal.logpdf(
-        np.asarray(node_b["sample_coordinates"]),
-        mean=np.asarray(node_b["position"]),
-        cov=covariance_b,
-        allow_singular=True,
-    )
-    log_density_a_on_a = multivariate_normal.logpdf(
-        np.asarray(node_a["sample_coordinates"]),
-        mean=np.asarray(node_a["position"]),
-        cov=covariance_a,
-        allow_singular=True,
-    )
-    log_density_b_on_a = multivariate_normal.logpdf(
-        np.asarray(node_a["sample_coordinates"]),
-        mean=np.asarray(node_b["position"]),
-        cov=covariance_b,
-        allow_singular=True,
-    )
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            message=(
+                r"(divide by zero|overflow|invalid value) "
+                r"encountered in (matmul|vecdot)"
+            ),
+            category=RuntimeWarning,
+        )
+        log_density_a_on_b = multivariate_normal.logpdf(
+            np.asarray(node_b["sample_coordinates"]),
+            mean=np.asarray(node_a["position"]),
+            cov=covariance_a,
+            allow_singular=True,
+        )
+        log_density_b_on_b = multivariate_normal.logpdf(
+            np.asarray(node_b["sample_coordinates"]),
+            mean=np.asarray(node_b["position"]),
+            cov=covariance_b,
+            allow_singular=True,
+        )
+        log_density_a_on_a = multivariate_normal.logpdf(
+            np.asarray(node_a["sample_coordinates"]),
+            mean=np.asarray(node_a["position"]),
+            cov=covariance_a,
+            allow_singular=True,
+        )
+        log_density_b_on_a = multivariate_normal.logpdf(
+            np.asarray(node_a["sample_coordinates"]),
+            mean=np.asarray(node_b["position"]),
+            cov=covariance_b,
+            allow_singular=True,
+        )
     # Equal priors make this an endpoint distinguishability score, independent
     # of the relative number of samples in each component.
     prob_a_to_b = float(np.mean(expit(log_density_a_on_b - log_density_b_on_b)))
