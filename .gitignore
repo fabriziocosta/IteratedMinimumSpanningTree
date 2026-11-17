@@ -36,7 +36,3 @@ venv/
 *.h5ad
 *.pt
 *.pth
-!/data/paul15/
-!/data/paul15/paul15.h5
-!/data/pbmc3k_raw.h5ad
-!/data/pbmc3k_processed.h5ad
