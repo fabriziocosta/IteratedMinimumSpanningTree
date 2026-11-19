@@ -116,7 +116,7 @@ def load_mnist_per_class_data(samples_per_class=100, random_state=42):
     return X, labels, info
 
 
-def make_live_tuning_display(labels, *, k, n_samples):
+def make_live_tuning_display(labels, *, k=5, n_samples=40):
     """Build a notebook callback that displays trial scores and best layouts."""
     from IPython.display import Markdown, display
 

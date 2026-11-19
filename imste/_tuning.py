@@ -16,6 +16,15 @@ if TYPE_CHECKING:
     from ._estimator import IteratedMinimumSpanningTreeEmbedder
 
 
+_DEFAULT_SEARCH_SPACE = {
+    "n_msts": (3, 30),
+    "learning_rate": (0.01, 0.1),
+    "negative_ratio": (1, 10),
+    "gravity_strength": (0.0, 1.0),
+    "mean_shift_iterations": (0, 5),
+}
+
+
 def _load_skopt():
     try:
         from skopt import gp_minimize
@@ -130,11 +139,11 @@ def tune_estimator(
     X: object,
     y: object,
     *,
-    search_space: Mapping[str, object],
+    search_space: Mapping[str, object] | None = None,
     k: int = 5,
     n_samples: int = 40,
     n_initial_points: int = 20,
-    coverage_weight: float = 0.2,
+    coverage_weight: float = 0.4,
     trial_callback: Callable[[dict[str, object]], None] | None = None,
 ):
     """Search using CV accuracy combined with robust spatial coverage."""
@@ -173,6 +182,9 @@ def tune_estimator(
             f"k={k} exceeds the smallest 5-fold training split ({smallest_training_fold})."
         )
 
+    if search_space is None:
+        search_space = _DEFAULT_SEARCH_SPACE
+    search_space = dict(search_space)
     names, dimensions = _search_dimensions(
         estimator, search_space, Integer, Real, Categorical
     )
@@ -258,6 +270,10 @@ def tune_estimator(
     result.best_coverage = float(coverage_scores[best_index])
     result.best_objective = float(objective_scores[best_index])
     result.coverage_weight = float(coverage_weight)
+    result.search_space = search_space
+    result.k = int(k)
+    result.n_samples = int(n_samples)
+    result.n_initial_points = initial_count
     result.cv_scores = np.asarray(cv_scores, dtype=float)
     result.coverage_scores = np.asarray(coverage_scores, dtype=float)
     result.objective_scores = np.asarray(objective_scores, dtype=float)

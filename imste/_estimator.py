@@ -1149,11 +1149,11 @@ class IteratedMinimumSpanningTreeEmbedder(
         X: object,
         y: object,
         *,
-        search_space: Mapping[str, object],
+        search_space: Mapping[str, object] | None = None,
         k: int = 5,
         n_samples: int = 40,
         n_initial_points: int = 20,
-        coverage_weight: float = 0.2,
+        coverage_weight: float = 0.4,
         trial_callback: Callable[[dict[str, object]], None] | None = None,
     ):
         """Tune settings for k-NN accuracy and spatial coverage of a 2D layout.
@@ -1163,14 +1163,18 @@ class IteratedMinimumSpanningTreeEmbedder(
         stratified five-fold cross-validation. Numeric ``(low, high)`` tuples
         define inclusive bounds, with integer or continuous dimensions inferred
         from the current estimator parameter type. Sequences define categorical
-        choices. The first ``min(n_initial_points, n_samples)`` trials use
+        choices. If ``search_space`` is omitted, the search varies ``n_msts``
+        from 3 to 30, ``learning_rate`` from 0.01 to 0.1, ``negative_ratio``
+        from 1 to 10, ``gravity_strength`` from 0.0 to 1.0, and
+        ``mean_shift_iterations`` from 0 to 5. The first
+        ``min(n_initial_points, n_samples)`` trials use
         Latin hypercube sampling; remaining trials use Gaussian-process Bayesian
         optimization.
 
         Trials maximize ``(1 - coverage_weight) * accuracy +
         coverage_weight * spatial_coverage``. Spatial coverage is normalized
         to [0, 1] from a robust, quantile-scaled 2D occupancy entropy score.
-        The default ``coverage_weight=0.2`` gives accuracy 80% of the objective;
+        The default ``coverage_weight=0.4`` gives accuracy 60% of the objective;
         set it to zero to tune accuracy alone.
 
         ``trial_callback``, when supplied, is called after each completed trial
@@ -1191,7 +1195,10 @@ class IteratedMinimumSpanningTreeEmbedder(
             Feature rows and corresponding single-output class labels.
         search_space : mapping
             Estimator parameter names mapped to numeric ``(low, high)`` bounds
-            or categorical choice sequences.
+            or categorical choice sequences. ``None`` uses defaults for
+            ``n_msts`` (3–30), ``learning_rate`` (0.01–0.1), ``negative_ratio``
+            (1–10), ``gravity_strength`` (0.0–1.0), and
+            ``mean_shift_iterations`` (0–5).
         k : int, default=5
             Number of neighbors in the k-NN scoring classifier.
         n_samples : int, default=40
@@ -1199,7 +1206,7 @@ class IteratedMinimumSpanningTreeEmbedder(
             initial Latin hypercube trials.
         n_initial_points : int, default=20
             Maximum number of initial Latin hypercube trials.
-        coverage_weight : float, default=0.2
+        coverage_weight : float, default=0.4
             Weight of spatial coverage in the combined objective, from zero to
             one. Accuracy receives the remaining weight.
         trial_callback : callable or None, default=None

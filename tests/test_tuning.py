@@ -158,3 +158,38 @@ def test_tune_rejects_searching_embedding_dimensions(monkeypatch):
         IteratedMinimumSpanningTreeEmbedder().tune(
             X, y, search_space={"n_components": (2, 3)}
         )
+
+
+def test_tune_defaults_to_standard_space_and_budget(monkeypatch):
+    calls = _fake_skopt(monkeypatch)
+
+    def fake_fit_transform(self, X, y=None):
+        embedding = np.asarray(X, dtype=float)[:, :2].copy()
+        self.embedding_ = embedding
+        return embedding
+
+    def fake_fit(self, X, y=None):
+        self.embedding_ = np.asarray(X, dtype=float)[:, :2].copy()
+        return self
+
+    monkeypatch.setattr(IteratedMinimumSpanningTreeEmbedder, "fit_transform", fake_fit_transform)
+    monkeypatch.setattr(IteratedMinimumSpanningTreeEmbedder, "fit", fake_fit)
+    X = np.array([[i, j] for i in range(5) for j in (0, 1)], dtype=float)
+    y = np.array([0] * 5 + [1] * 5)
+
+    result = IteratedMinimumSpanningTreeEmbedder(random_state=5).tune(
+        X, y, trial_callback=lambda _: None
+    )
+
+    assert calls["n_calls"] == 40
+    assert calls["n_initial_points"] == 20
+    assert calls["initial_point_generator"] == "lhs"
+    assert result.k == 5
+    assert result.coverage_weight == pytest.approx(0.4)
+    assert result.search_space == {
+        "n_msts": (3, 30),
+        "learning_rate": (0.01, 0.1),
+        "negative_ratio": (1, 10),
+        "gravity_strength": (0.0, 1.0),
+        "mean_shift_iterations": (0, 5),
+    }

@@ -99,29 +99,22 @@ plt.scatter(embedding[:, 0], embedding[:, 1], c=digits.target, cmap="tab10", s=1
 
 ### Tune a labeled 2D embedding
 
-`tune()` searches estimator parameters using a combined score of 80% mean 5-fold
-k-NN accuracy and 20% robust spatial coverage. Coverage estimates how evenly
+`tune()` searches estimator parameters using a combined score of 60% mean 5-fold
+k-NN accuracy and 40% robust spatial coverage. Coverage estimates how evenly
 points occupy a robustly scaled 2D grid, so a few outliers cannot dominate it.
 Each trial fits an unsupervised embedding on all feature rows; labels are used
-only for scoring. Set `coverage_weight=0` to optimize accuracy alone. Numeric
-tuples are inclusive bounds, while lists are categorical choices. Integer or
-continuous dimensions are inferred from the current value of each estimator
-parameter. The default budget is 40 trials, with up to 20 initial Latin
-hypercube samples.
+only for scoring. With no `search_space`, it tunes `n_msts` (3–30),
+`learning_rate` (0.01–0.1), `negative_ratio` (1–10), `gravity_strength`
+(0.0–1.0), and `mean_shift_iterations` (0–5). Set `coverage_weight=0` to
+optimize accuracy alone. Numeric tuples are inclusive bounds, while lists are
+categorical choices. Integer or continuous dimensions are inferred from the
+current value of each estimator parameter. The default budget is 40 trials,
+with 20 initial Latin hypercube samples. The estimator's default
+`n_epochs=200` applies to each trial.
 
 ```python
 mapper = IteratedMinimumSpanningTreeEmbedder(random_state=42)
-search = mapper.tune(
-    X,
-    digits.target,
-    search_space={
-        "n_msts": (5, 25),
-        "learning_rate": (0.01, 0.1),
-        "include_knn_attraction": [False, True],
-    },
-    k=5,
-    n_samples=40,
-)
+search = mapper.tune(X, digits.target)
 
 print(search.best_params, search.best_score, search.best_coverage)
 embedding = mapper.embedding_

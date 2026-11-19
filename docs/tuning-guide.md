@@ -41,8 +41,8 @@ The search maximizes this weighted score:
 objective = (1 - coverage_weight) * accuracy + coverage_weight * coverage
 ```
 
-The default `coverage_weight=0.2` gives accuracy 80% of the objective and
-coverage 20%. Set it to zero for accuracy-only tuning. A larger weight favors
+The default `coverage_weight=0.4` gives accuracy 60% of the objective and
+coverage 40%. Set it to zero for accuracy-only tuning. A larger weight favors
 layouts that spread points more evenly across the plot, even when that costs
 some accuracy. The objective and both component scores are reported so this
 tradeoff remains visible.
@@ -50,44 +50,41 @@ tradeoff remains visible.
 ## Search space and budget
 
 Pass a mapping from estimator parameter names to numeric bounds or categorical
-choices. A two-number tuple specifies inclusive numeric bounds. The estimator's
-current parameter type determines whether the search dimension is integer or
-continuous. A list or other sequence specifies categorical choices; use this
-for booleans and string-valued parameters. `n_components` is fixed at 2 and
-cannot be searched.
+choices. By default, `tune()` searches the following parameters and ranges:
+
+| Parameter | Default range | Dimension |
+| --- | --- | --- |
+| `n_msts` | `(3, 30)` | Integer |
+| `learning_rate` | `(0.01, 0.1)` | Continuous |
+| `negative_ratio` | `(1, 10)` | Integer |
+| `gravity_strength` | `(0.0, 1.0)` | Continuous |
+| `mean_shift_iterations` | `(0, 5)` | Integer |
+
+To use these defaults, omit `search_space`. A two-number tuple specifies
+inclusive numeric bounds. The estimator's current parameter type determines
+whether the search dimension is integer or continuous. A list or other sequence
+specifies categorical choices; use this for booleans and string-valued
+parameters. `n_components` is fixed at 2 and cannot be searched.
 
 ```python
 from imste import IteratedMinimumSpanningTreeEmbedder
 
 mapper = IteratedMinimumSpanningTreeEmbedder(
-    n_epochs=80,
     random_state=42,
 )
 
-search = mapper.tune(
-    X,
-    y,
-    search_space={
-        "n_msts": (3, 30),
-        "learning_rate": (0.01, 0.1),
-        "negative_ratio": (1, 10),
-        "gravity_strength": (0.0, 1.0),
-        "mean_shift_iterations": (0, 5),
-    },
-    k=5,
-    n_samples=40,
-    n_initial_points=20,
-    coverage_weight=0.2,
-)
+search = mapper.tune(X, y)
 
 print(search.best_accuracy, search.best_coverage, search.best_objective)
 embedding = mapper.embedding_
 ```
 
 `n_samples` is the total number of parameter evaluations, including the
-initial Latin hypercube samples. Defaults are 40 total trials and 20 initial
-points; when the budget is smaller, all trials use the initial-point sampler.
-The estimator's `random_state` seeds the search and the shuffled CV folds.
+initial Latin hypercube samples. Defaults are `n_samples=40`,
+`n_initial_points=20`, `k=5`, and `coverage_weight=0.4`; when the budget is
+smaller, all trials use the initial-point sampler. Each embedding fit uses the
+estimator's `n_epochs` setting, which defaults to 200. The estimator's
+`random_state` seeds the search and the shuffled CV folds.
 
 Each configuration fits IMSTE on the full supplied data, followed by one final
 fit of the selected configuration. Search cost therefore grows with the number
@@ -134,5 +131,5 @@ helper, as the MNIST tuning notebook does.
 `X` and `y` must have the same number of rows, and `y` must contain at least two
 classes with at least five examples in every class. `k` must fit within the
 smallest 5-fold training split. For MNIST, the notebook defaults to a balanced
-sample of 100 images per digit and reads the repository cache when available,
+sample of 2,000 images per digit and reads the repository cache when available,
 falling back to OpenML otherwise.
