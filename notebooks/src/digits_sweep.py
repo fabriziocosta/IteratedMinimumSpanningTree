@@ -116,6 +116,18 @@ def load_mnist_per_class_data(
     return X, labels, info
 
 
+def load_mnist_family_data(dataset_name="MNIST"):
+    """Load and standardize every row from an MNIST-family dataset."""
+    X, labels = _load_mnist_arrays(dataset_name)
+    X = StandardScaler().fit_transform(X).astype(np.float32)
+    info = {
+        "dataset": dataset_name,
+        "source_rows": len(X),
+        "class_counts": pd.Series(labels).value_counts().sort_index().rename("images"),
+    }
+    return X, labels, info
+
+
 def make_live_tuning_display(labels, *, k=5, n_samples=40, figsize=(12, 8)):
     """Build a notebook callback for scores and best layouts.
 
