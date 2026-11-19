@@ -1155,6 +1155,7 @@ class IteratedMinimumSpanningTreeEmbedder(
         n_initial_points: int = 20,
         coverage_weight: float = 0.4,
         trial_callback: Callable[[dict[str, object]], None] | None = None,
+        verbose: bool = False,
     ):
         """Tune settings for k-NN accuracy and spatial coverage of a 2D layout.
 
@@ -1181,6 +1182,10 @@ class IteratedMinimumSpanningTreeEmbedder(
         with its accuracy, coverage and objective scores, the best-so-far
         metrics and parameters, and a copy of that trial's embedding. This is
         useful for displaying live progress in a notebook.
+
+        ``verbose`` controls progress output from the optimizer and trial/final
+        estimator fits. It defaults to ``False``; ``trial_callback`` remains
+        independent and is silent when omitted.
 
         The best configuration is then fitted on all rows and stored on this
         estimator. The returned scikit-optimize ``OptimizeResult`` contains the
@@ -1211,6 +1216,8 @@ class IteratedMinimumSpanningTreeEmbedder(
             one. Accuracy receives the remaining weight.
         trial_callback : callable or None, default=None
             Function receiving a trial-result dictionary after each evaluation.
+        verbose : bool, default=False
+            Whether to show optimizer and estimator fit progress.
 
         Returns
         -------
@@ -1232,6 +1239,7 @@ class IteratedMinimumSpanningTreeEmbedder(
             n_initial_points=n_initial_points,
             coverage_weight=coverage_weight,
             trial_callback=trial_callback,
+            verbose=verbose,
         )
 
     def fit_transform(

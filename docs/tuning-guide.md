@@ -128,6 +128,11 @@ helper, as the MNIST tuning notebook does. Its reusable
 `make_live_tuning_display()` helper accepts `figsize=(width, height)` in inches
 so the live image size can be set directly in the notebook call.
 
+`tune(..., verbose=False)` suppresses optimizer and estimator fit progress by
+default. It produces no progress output when `trial_callback=None`. Supplying a
+`trial_callback` still invokes it after every trial, regardless of `verbose`;
+set `verbose=True` to also show optimizer and fit progress.
+
 ## Data requirements
 
 `X` and `y` must have the same number of rows, and `y` must contain at least two

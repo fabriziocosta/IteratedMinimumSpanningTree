@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import warnings
 from collections.abc import Mapping, Sequence
 from numbers import Integral, Real as NumericReal
 from typing import TYPE_CHECKING, Callable
@@ -145,6 +146,7 @@ def tune_estimator(
     n_initial_points: int = 20,
     coverage_weight: float = 0.4,
     trial_callback: Callable[[dict[str, object]], None] | None = None,
+    verbose: bool = False,
 ):
     """Search using CV accuracy combined with robust spatial coverage."""
     gp_minimize, Integer, Real, Categorical = _load_skopt()
@@ -165,6 +167,8 @@ def tune_estimator(
         raise ValueError("coverage_weight must be a finite number in [0, 1].")
     if trial_callback is not None and not callable(trial_callback):
         raise ValueError("trial_callback must be callable or None.")
+    if not isinstance(verbose, (bool, np.bool_)):
+        raise ValueError("verbose must be a boolean.")
 
     X_checked, y_checked = check_X_y(
         X, y, accept_sparse="csr", ensure_2d=True, dtype=None
@@ -205,6 +209,7 @@ def tune_estimator(
         parameters = dict(zip(names, values))
         candidate = clone(estimator)
         candidate.set_params(n_components=2, **parameters)
+        candidate.verbose = bool(verbose)
         embedding = candidate.fit_transform(X_checked)
         accuracy = float(
             cross_val_score(
@@ -250,19 +255,36 @@ def tune_estimator(
         return -objective_score
 
     initial_count = min(int(n_initial_points), int(n_samples))
-    result = gp_minimize(
-        objective,
-        dimensions,
-        n_calls=int(n_samples),
-        n_initial_points=initial_count,
-        initial_point_generator="lhs",
-        random_state=estimator.random_state,
-    )
+    with warnings.catch_warnings():
+        if not verbose:
+            # Repeated proposals are normal in a bounded Bayesian search. Keep
+            # skopt's warning about replacing them with random points out of
+            # otherwise quiet notebook runs.
+            warnings.filterwarnings(
+                "ignore",
+                message=r"The objective has been evaluated at point .* before, using random point .*",
+                category=UserWarning,
+                module=r"skopt\.optimizer\.optimizer",
+            )
+        result = gp_minimize(
+            objective,
+            dimensions,
+            n_calls=int(n_samples),
+            n_initial_points=initial_count,
+            initial_point_generator="lhs",
+            random_state=estimator.random_state,
+            verbose=bool(verbose),
+        )
 
     best_index = int(np.argmin(result.func_vals))
     best_parameters = dict(zip(names, result.x))
     estimator.set_params(n_components=2, **best_parameters)
-    estimator.fit(X_checked)
+    original_verbose = estimator.verbose
+    try:
+        estimator.verbose = bool(verbose)
+        estimator.fit(X_checked)
+    finally:
+        estimator.verbose = original_verbose
 
     result.best_params = best_parameters
     result.best_score = float(cv_scores[best_index])
