@@ -55,7 +55,6 @@ notebook = [
 tuning = ["scikit-optimize>=0.10.2"]
 preprocessing = [
     "sentence-transformers[image]>=6.3",
-    "nsppk @ git+https://github.com/Xfcosta/NSPPK.git",
 ]
 
 [tool.setuptools.packages.find]

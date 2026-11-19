@@ -6,16 +6,23 @@ resulting feature vectors are then used by IMSTE to build the embedding.
 
 ## Use a built-in modality preset
 
-Install the optional text, image, and graph integrations:
+Install the optional text and image integration:
 
 ```bash
 python -m pip install "imste[preprocessing]"
 ```
 
+Install NSPPK separately for the graph preset:
+
+```bash
+python -m pip install git+https://github.com/Xfcosta/NSPPK.git
+```
+
 The text and image presets use Google's multimodal EmbeddingGemma 2 model via
 Sentence Transformers. The first fit downloads the model weights if they are
 not already cached. The graph preset uses NSPPK to vectorize a sequence of
-NetworkX graphs. The extra installs NSPPK from its upstream repository.
+NetworkX graphs. NSPPK is installed separately because it is distributed from
+its upstream repository rather than PyPI.
 
 ```python
 from imste import IteratedMinimumSpanningTreeEmbedder

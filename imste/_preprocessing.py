@@ -126,7 +126,7 @@ def make_preprocessor(
             except ImportError as exc:
                 raise ImportError(
                     "The graph preprocessor requires NSPPK. Install it with "
-                    "`python -m pip install 'imste[preprocessing]'`."
+                    "`python -m pip install git+https://github.com/Xfcosta/NSPPK.git`."
                 ) from exc
             return NSPPK(**options)
         raise ValueError(

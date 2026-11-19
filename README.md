@@ -47,9 +47,10 @@ python -m pip install "imste[notebook]"
 
 From a source checkout, use `python -m pip install ".[notebook]"` instead.
 
-To embed raw text, images, or NetworkX graphs before fitting IMSTE, install the
-optional preprocessing integrations with
-`python -m pip install "imste[preprocessing]"`. See the
+To embed raw text and images before fitting IMSTE, install the optional model
+integration with `python -m pip install "imste[preprocessing]"`. The graph
+preset needs NSPPK, installed from its repository with
+`python -m pip install git+https://github.com/Xfcosta/NSPPK.git`. See the
 [preprocessing guide](docs/preprocessing-guide.md) for built-in modality presets
 and custom scikit-learn transformers.
 
