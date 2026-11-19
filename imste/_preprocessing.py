@@ -43,7 +43,11 @@ class _EmbeddingGemmaTransformer(BaseEstimator, TransformerMixin):
             ) from exc
 
         self.model_ = SentenceTransformer(self.model_name, device=self.device)
-        self.n_features_out_ = self.model_.get_sentence_embedding_dimension()
+        get_dimension = getattr(self.model_, "get_embedding_dimension", None)
+        if not callable(get_dimension):
+            # Keep compatibility with older Sentence Transformers releases.
+            get_dimension = self.model_.get_sentence_embedding_dimension
+        self.n_features_out_ = get_dimension()
         return self
 
     def transform(self, X: object) -> np.ndarray:
