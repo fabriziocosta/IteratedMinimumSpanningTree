@@ -116,8 +116,11 @@ def load_mnist_per_class_data(
     return X, labels, info
 
 
-def make_live_tuning_display(labels, *, k=5, n_samples=40):
-    """Build a notebook callback that displays trial scores and best layouts."""
+def make_live_tuning_display(labels, *, k=5, n_samples=40, figsize=(12, 8)):
+    """Build a notebook callback for scores and best layouts.
+
+    ``figsize`` is the Matplotlib figure size in inches for each live plot.
+    """
     from IPython.display import Markdown, display
 
     labels = np.asarray(labels)
@@ -145,6 +148,7 @@ def make_live_tuning_display(labels, *, k=5, n_samples=40):
             figure, _ = plot_mnist_embedding(
                 trial["embedding"],
                 labels,
+                figsize=figsize,
                 title=(
                     f"Best so far ({k}-NN): objective = "
                     f"{trial['best_objective']:.3f}; "
@@ -159,8 +163,13 @@ def make_live_tuning_display(labels, *, k=5, n_samples=40):
     return show_trial, rows
 
 
-def plot_mnist_embedding(embedding, labels, *, title, point_size=12):
-    """Plot a 2D MNIST embedding colored by digit and return figure and axes."""
+def plot_mnist_embedding(
+    embedding, labels, *, title, point_size=12, figsize=(12, 8)
+):
+    """Plot a 2D MNIST embedding and return its figure and axes.
+
+    ``figsize`` is the Matplotlib figure size in inches.
+    """
     coordinates = np.asarray(embedding)
     labels = np.asarray(labels)
     if coordinates.ndim != 2 or coordinates.shape[1] != 2:
@@ -168,11 +177,13 @@ def plot_mnist_embedding(embedding, labels, *, title, point_size=12):
     if len(coordinates) != len(labels):
         raise ValueError("embedding and labels must have the same number of rows.")
 
+    figure, axes = plt.subplots(figsize=figsize)
     figure, axes = plot_embedding(
         coordinates,
         labels,
         point_size=point_size,
         point_alpha=0.8,
+        ax=axes,
         legend_position="right",
     )
     figure.suptitle(title)

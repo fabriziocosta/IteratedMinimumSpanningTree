@@ -124,7 +124,9 @@ containing:
 The callback can update a table or display the best embedding while the search
 runs. For plots, use the public
 [`imste.visualization.plot_embedding`](visualization-guide.md#plot_embedding)
-helper, as the MNIST tuning notebook does.
+helper, as the MNIST tuning notebook does. Its reusable
+`make_live_tuning_display()` helper accepts `figsize=(width, height)` in inches
+so the live image size can be set directly in the notebook call.
 
 ## Data requirements
 
