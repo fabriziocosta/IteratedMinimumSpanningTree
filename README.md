@@ -5,9 +5,10 @@
 <p align="center"><img src="docs/images/imste-arxiv-example.png" alt="IMSTE embedding example" width="700"></p>
 
 **Iterated Minimum Spanning Tree Embedding (IMSTE)** is a scikit-learn
-transformer for learning low-dimensional coordinates from numeric data. It
-builds a weighted graph from ranked minimum spanning trees, then
-optimizes one coordinate vector per sample.
+transformer for learning low-dimensional coordinates from feature vectors. It
+builds a weighted graph from ranked minimum spanning trees, then optimizes one
+coordinate vector per sample. Optional `.preprocessor(...)` presets accept raw
+text, images, or graph objects and vectorize them before fitting IMSTE.
 
 The package has two explicit estimators: `IteratedMinimumSpanningTreeEmbedder`
 learns coordinates for the training rows, while `InductiveIMSTE` also learns
@@ -45,6 +46,12 @@ python -m pip install "imste[notebook]"
 ```
 
 From a source checkout, use `python -m pip install ".[notebook]"` instead.
+
+To embed raw text, images, or NetworkX graphs before fitting IMSTE, install the
+optional preprocessing integrations with
+`python -m pip install "imste[preprocessing]"`. See the
+[preprocessing guide](docs/preprocessing-guide.md) for built-in modality presets
+and custom scikit-learn transformers.
 
 To tune IMSTE against labeled 2D separation, install the optional Bayesian
 optimization dependency with `python -m pip install "imste[tuning]"`.

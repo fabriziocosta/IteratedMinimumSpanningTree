@@ -239,6 +239,9 @@ class _EstimatorGraphMethods:
                 "transform(X) is unavailable after fit_graph(); use embedding_."
             )
         check_is_fitted(self, attributes=["embedding_", "X_fit_"])
+        if getattr(self, "input_preprocessor", None) is not None:
+            check_is_fitted(self, attributes=["preprocessor_"])
+            X = self.preprocessor_.transform(X)
         self._check_feature_names(X)
         X_checked = check_array(
             X, dtype=np.float64, ensure_2d=True, accept_sparse="csr"
@@ -259,9 +262,19 @@ class _EstimatorGraphMethods:
                 right.sum_duplicates()
                 left.eliminate_zeros()
                 right.eliminate_zeros()
-                same_input = (left != right).nnz == 0
+                difference = left - right
+                difference.eliminate_zeros()
+                if getattr(self, "input_preprocessor", None) is None:
+                    same_input = difference.nnz == 0
+                else:
+                    same_input = not np.any(np.abs(difference.data) > 1e-7)
             else:
-                same_input = np.array_equal(X_checked, self.X_fit_)
+                if getattr(self, "input_preprocessor", None) is None:
+                    same_input = np.array_equal(X_checked, self.X_fit_)
+                else:
+                    same_input = np.allclose(
+                        X_checked, self.X_fit_, rtol=0.0, atol=1e-7
+                    )
         if same_input:
             return self.embedding_.copy()
         raise ValueError(

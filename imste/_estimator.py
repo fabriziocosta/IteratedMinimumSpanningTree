@@ -180,6 +180,9 @@ class IteratedMinimumSpanningTreeEmbedder(
     verbose : bool, default=False
         Print timestamped fit stages and display progress bars for graph
         construction, multilevel initialization, and optimization.
+    input_preprocessor : {'text', 'image', 'graph'} or transformer, default=None
+        Optional raw-input transformer to fit before IMSTE. Use
+        :meth:`preprocessor` to select a modality preset with its options.
     """
 
     def __init__(
@@ -227,6 +230,7 @@ class IteratedMinimumSpanningTreeEmbedder(
         mean_shift_bandwidth_factor: float = 5.0,
         mean_shift_step_size: float = 0.5,
         mean_shift_iterations: int = 1,
+        input_preprocessor: object | str | None = None,
     ) -> None:
         self.n_msts = n_msts
         self.n_components = n_components
@@ -274,6 +278,7 @@ class IteratedMinimumSpanningTreeEmbedder(
         self.mean_shift_bandwidth_factor = mean_shift_bandwidth_factor
         self.mean_shift_step_size = mean_shift_step_size
         self.mean_shift_iterations = mean_shift_iterations
+        self.input_preprocessor = input_preprocessor
 
     def _validated_fit_options(self) -> dict[str, object]:
         if not isinstance(self.verbose, (bool, np.bool_)):
@@ -937,7 +942,20 @@ class IteratedMinimumSpanningTreeEmbedder(
         per-batch device event recording on long fits.
         """
         fit_started = time.perf_counter()
-        del y  # Unsupervised: labels are intentionally never used.
+        if self.input_preprocessor is None:
+            if hasattr(self, "preprocessor_"):
+                del self.preprocessor_
+        else:
+            from sklearn.base import clone
+
+            from ._preprocessing import fit_transform_input, make_preprocessor
+
+            configured = self.input_preprocessor
+            if isinstance(configured, str):
+                configured = make_preprocessor(configured)
+            self.preprocessor_ = clone(configured)
+            X = fit_transform_input(self.preprocessor_, X, y)
+        del y  # Labels are available to an optional supervised preprocessor only.
         options = self._validated_fit_options()
         for name in ("feature_neighbor_graph_", "feature_neighbor_graph_reused_"):
             if hasattr(self, name):
@@ -1142,6 +1160,40 @@ class IteratedMinimumSpanningTreeEmbedder(
         self.fit_time_ = time.perf_counter() - fit_started
         if self._progress_reporter is not None:
             self._progress_reporter.finish()
+        return self
+
+    def preprocessor(self, preprocessor: str | object, **options: object):
+        """Attach an input transformer for raw text, images, graphs, or features.
+
+        ``preprocessor`` may be ``'text'`` or ``'image'`` for the optional
+        EmbeddingGemma 2 model, ``'graph'`` for NSPPK, or any scikit-learn-
+        compatible transformer. The transformer is fitted before IMSTE when
+        :meth:`fit` or :meth:`fit_transform` is called. This method configures
+        and returns this estimator for chaining.
+
+        Text and image presets accept ``model_name`` (default
+        ``'google/embeddinggemma-2'``), ``batch_size`` (default 32), and
+        ``device`` (default ``None``). Graph preset options are passed to
+        ``NSPPK``. Custom transformers do not accept additional options.
+
+        Parameters
+        ----------
+        preprocessor : {'text', 'image', 'graph'} or transformer
+            Modality preset or transformer implementing ``fit`` and
+            ``transform``.
+        **options
+            Preset-specific options.
+
+        Returns
+        -------
+        self
+            The configured IMSTE estimator.
+        """
+        from ._preprocessing import make_preprocessor
+
+        self.input_preprocessor = make_preprocessor(
+            preprocessor, options=options
+        )
         return self
 
     def tune(
