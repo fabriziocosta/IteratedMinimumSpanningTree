@@ -947,6 +947,11 @@ class IteratedMinimumSpanningTreeEmbedder(
         )
         if issparse(X_checked):
             X_checked = csr_matrix(X_checked)
+            if self.mst_method == "famst":
+                # FAMST's approximate-neighbor backends operate on dense
+                # features. Keep accepting sparse caller input, but convert it
+                # here so selecting the approximate method is sufficient.
+                X_checked = X_checked.toarray()
         # Cosine distance depends only on row direction. Normalize with a
         # scale-first algorithm so very large finite inputs cannot overflow
         # scikit-learn's dot products during distance calculation or PCA init.
