@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 
 import numpy as np
 from scipy.sparse import csr_matrix, issparse
@@ -1143,6 +1143,89 @@ class IteratedMinimumSpanningTreeEmbedder(
         if self._progress_reporter is not None:
             self._progress_reporter.finish()
         return self
+
+    def tune(
+        self,
+        X: object,
+        y: object,
+        *,
+        search_space: Mapping[str, object],
+        k: int = 5,
+        n_samples: int = 40,
+        n_initial_points: int = 20,
+        coverage_weight: float = 0.2,
+        trial_callback: Callable[[dict[str, object]], None] | None = None,
+    ):
+        """Tune settings for k-NN accuracy and spatial coverage of a 2D layout.
+
+        Each search trial fits IMSTE once on all rows in ``X``; labels are
+        used only to score that transductive embedding with shuffled,
+        stratified five-fold cross-validation. Numeric ``(low, high)`` tuples
+        define inclusive bounds, with integer or continuous dimensions inferred
+        from the current estimator parameter type. Sequences define categorical
+        choices. The first ``min(n_initial_points, n_samples)`` trials use
+        Latin hypercube sampling; remaining trials use Gaussian-process Bayesian
+        optimization.
+
+        Trials maximize ``(1 - coverage_weight) * accuracy +
+        coverage_weight * spatial_coverage``. Spatial coverage is normalized
+        to [0, 1] from a robust, quantile-scaled 2D occupancy entropy score.
+        The default ``coverage_weight=0.2`` gives accuracy 80% of the objective;
+        set it to zero to tune accuracy alone.
+
+        ``trial_callback``, when supplied, is called after each completed trial
+        with its accuracy, coverage and objective scores, the best-so-far
+        metrics and parameters, and a copy of that trial's embedding. This is
+        useful for displaying live progress in a notebook.
+
+        The best configuration is then fitted on all rows and stored on this
+        estimator. The returned scikit-optimize ``OptimizeResult`` contains the
+        separate trial metrics, the selected parameters, and final embedding.
+        ``best_score`` remains the selected trial's accuracy;
+        ``best_objective`` is the value optimized by Bayesian search.
+        ``n_components`` is fixed to 2 during tuning.
+
+        Parameters
+        ----------
+        X, y : array-like
+            Feature rows and corresponding single-output class labels.
+        search_space : mapping
+            Estimator parameter names mapped to numeric ``(low, high)`` bounds
+            or categorical choice sequences.
+        k : int, default=5
+            Number of neighbors in the k-NN scoring classifier.
+        n_samples : int, default=40
+            Total number of parameter configurations to evaluate, including
+            initial Latin hypercube trials.
+        n_initial_points : int, default=20
+            Maximum number of initial Latin hypercube trials.
+        coverage_weight : float, default=0.2
+            Weight of spatial coverage in the combined objective, from zero to
+            one. Accuracy receives the remaining weight.
+        trial_callback : callable or None, default=None
+            Function receiving a trial-result dictionary after each evaluation.
+
+        Returns
+        -------
+        scikit-optimize OptimizeResult
+            Search history with accuracy, coverage and combined objective
+            scores, plus the best fitted embedding. The estimator exposes
+            ``best_params_``, ``best_score_``, ``best_coverage_``,
+            ``best_objective_``, and ``tune_result_``.
+        """
+        from ._tuning import tune_estimator
+
+        return tune_estimator(
+            self,
+            X,
+            y,
+            search_space=search_space,
+            k=k,
+            n_samples=n_samples,
+            n_initial_points=n_initial_points,
+            coverage_weight=coverage_weight,
+            trial_callback=trial_callback,
+        )
 
     def fit_transform(
         self,

@@ -25,6 +25,26 @@ if str(_project_root) not in sys.path:
     sys.path.insert(0, str(_project_root))
 
 from imste import IteratedMinimumSpanningTreeEmbedder
+from imste.visualization import plot_embedding
+
+
+def _load_mnist_arrays():
+    """Load raw MNIST arrays from the project cache or OpenML."""
+    cache_file = _project_root / "data" / "mnist" / "cache" / "mnist_784_v1.npz"
+    if cache_file.exists():
+        with np.load(cache_file, allow_pickle=False) as cache:
+            X = np.asarray(cache["features"], dtype=np.float32)
+            labels = np.asarray(cache["labels"], dtype=np.int64)
+        return X, labels, str(cache_file)
+
+    mnist = fetch_openml(
+        "mnist_784", version=1, as_frame=False, parser="liac-arff", cache=True
+    )
+    return (
+        np.asarray(mnist.data, dtype=np.float32),
+        np.asarray(mnist.target, dtype=np.int64),
+        "OpenML mnist_784",
+    )
 
 
 def load_mnist_data(sample_size=2000, random_state=42):
@@ -39,11 +59,7 @@ def load_mnist_data(sample_size=2000, random_state=42):
         ) or sample_size < 10:
             raise ValueError("sample_size must be at least 10, or None for all MNIST rows.")
 
-    mnist = fetch_openml(
-        "mnist_784", version=1, as_frame=False, parser="liac-arff", cache=True
-    )
-    X = np.asarray(mnist.data, dtype=np.float32)
-    labels = np.asarray(mnist.target, dtype=np.int64)
+    X, labels, _ = _load_mnist_arrays()
 
     if sample_size is not None:
         if sample_size > len(X):
@@ -62,6 +78,106 @@ def load_mnist_data(sample_size=2000, random_state=42):
 
     X = StandardScaler().fit_transform(X)
     return X, labels
+
+
+def load_mnist_per_class_data(samples_per_class=100, random_state=42):
+    """Load and standardize an exact, reproducible MNIST sample per digit.
+
+    Returns ``(X, labels, info)``. The info mapping includes the data source,
+    source row count, and sampled class counts.
+    """
+    if isinstance(samples_per_class, (bool, np.bool_)) or not isinstance(
+        samples_per_class, (int, np.integer)
+    ) or samples_per_class < 1:
+        raise ValueError("samples_per_class must be a positive integer.")
+
+    X_all, labels_all, source = _load_mnist_arrays()
+    classes, class_counts = np.unique(labels_all, return_counts=True)
+    if samples_per_class > int(class_counts.min()):
+        raise ValueError(
+            "samples_per_class exceeds the number of available rows in the "
+            f"smallest class ({int(class_counts.min())})."
+        )
+
+    rng = np.random.RandomState(random_state)
+    selected = np.concatenate([
+        rng.choice(np.flatnonzero(labels_all == label), samples_per_class, replace=False)
+        for label in classes
+    ])
+    rng.shuffle(selected)
+    X = StandardScaler().fit_transform(X_all[selected]).astype(np.float32)
+    labels = labels_all[selected]
+    info = {
+        "source": source,
+        "source_rows": len(X_all),
+        "samples_per_class": int(samples_per_class),
+        "class_counts": pd.Series(labels).value_counts().sort_index().rename("images"),
+    }
+    return X, labels, info
+
+
+def make_live_tuning_display(labels, *, k, n_samples):
+    """Build a notebook callback that displays trial scores and best layouts."""
+    from IPython.display import Markdown, display
+
+    labels = np.asarray(labels)
+    rows = []
+    progress_handle = display(Markdown("Starting search…"), display_id=True)
+    table_handle = display(pd.DataFrame(), display_id=True)
+    plot_handle = display(Markdown("The best embedding will appear here."), display_id=True)
+
+    def show_trial(trial):
+        rows.append({
+            "trial": trial["trial"],
+            "accuracy": trial["accuracy"],
+            "coverage": trial["coverage"],
+            "objective": trial["objective"],
+            "best objective": trial["best_objective"],
+            **trial["parameters"],
+        })
+        progress_handle.update(Markdown(
+            f"**Trial {trial['trial']}/{n_samples}** — accuracy: {trial['accuracy']:.3f}; "
+            f"coverage: {trial['coverage']:.3f}; objective: {trial['objective']:.3f}; "
+            f"best objective: {trial['best_objective']:.3f}"
+        ))
+        table_handle.update(pd.DataFrame(rows).set_index("trial"))
+        if trial["is_best"]:
+            figure, _ = plot_mnist_embedding(
+                trial["embedding"],
+                labels,
+                title=(
+                    f"Best so far ({k}-NN): objective = "
+                    f"{trial['best_objective']:.3f}; "
+                    f"accuracy = {trial['best_accuracy']:.3f}; "
+                    f"coverage = {trial['best_coverage']:.3f} "
+                    f"(trial {trial['trial']})"
+                ),
+            )
+            plot_handle.update(figure)
+            plt.close(figure)
+
+    return show_trial, rows
+
+
+def plot_mnist_embedding(embedding, labels, *, title, point_size=12):
+    """Plot a 2D MNIST embedding colored by digit and return figure and axes."""
+    coordinates = np.asarray(embedding)
+    labels = np.asarray(labels)
+    if coordinates.ndim != 2 or coordinates.shape[1] != 2:
+        raise ValueError("embedding must have shape (n_samples, 2).")
+    if len(coordinates) != len(labels):
+        raise ValueError("embedding and labels must have the same number of rows.")
+
+    figure, axes = plot_embedding(
+        coordinates,
+        labels,
+        point_size=point_size,
+        point_alpha=0.8,
+        legend_position="right",
+    )
+    figure.suptitle(title)
+    figure.tight_layout(rect=(0, 0, 1, 0.96))
+    return figure, axes
 
 
 def format_duration(seconds: float) -> str:

@@ -46,6 +46,9 @@ python -m pip install "imste[notebook]"
 
 From a source checkout, use `python -m pip install ".[notebook]"` instead.
 
+To tune IMSTE against labeled 2D separation, install the optional Bayesian
+optimization dependency with `python -m pip install "imste[tuning]"`.
+
 Both estimators accept dense arrays and SciPy CSR matrices. The graph builders
 keep CSR inputs sparse. `InductiveIMSTE` densifies only each MLP mini-batch.
 The default FAMST graph builder uses RINND for dense Euclidean inputs and
@@ -93,6 +96,41 @@ embedding = mapper.fit_transform(X)
 
 plt.scatter(embedding[:, 0], embedding[:, 1], c=digits.target, cmap="tab10", s=10)
 ```
+
+### Tune a labeled 2D embedding
+
+`tune()` searches estimator parameters using a combined score of 80% mean 5-fold
+k-NN accuracy and 20% robust spatial coverage. Coverage estimates how evenly
+points occupy a robustly scaled 2D grid, so a few outliers cannot dominate it.
+Each trial fits an unsupervised embedding on all feature rows; labels are used
+only for scoring. Set `coverage_weight=0` to optimize accuracy alone. Numeric
+tuples are inclusive bounds, while lists are categorical choices. Integer or
+continuous dimensions are inferred from the current value of each estimator
+parameter. The default budget is 40 trials, with up to 20 initial Latin
+hypercube samples.
+
+```python
+mapper = IteratedMinimumSpanningTreeEmbedder(random_state=42)
+search = mapper.tune(
+    X,
+    digits.target,
+    search_space={
+        "n_msts": (5, 25),
+        "learning_rate": (0.01, 0.1),
+        "include_knn_attraction": [False, True],
+    },
+    k=5,
+    n_samples=40,
+)
+
+print(search.best_params, search.best_score, search.best_coverage)
+embedding = mapper.embedding_
+```
+
+The best settings are refitted on all rows and stored on `mapper`; the returned
+scikit-optimize result contains the search history and final embedding.
+See the [tuning guide](docs/tuning-guide.md) for the combined accuracy and
+coverage objective, result fields, and live-progress callback.
 
 ### Fit from a distance graph
 
@@ -485,6 +523,7 @@ Active experiment notebooks use concise dataset-based names. Dataset setup noteb
 - [cifar100_exp](notebooks/cifar100_exp.ipynb): compare CIFAR-100 image embeddings with superclass hues and fine-class shades.
 - [interactive](notebooks/interactive.ipynb): interactively refine a balanced arXiv layout with gravity followed by mean shift.
 - [mnist_exp](notebooks/mnist_exp.ipynb): compare MNIST, Fashion-MNIST, and Kuzushiji-MNIST.
+- [tune_mnist](notebooks/tune_mnist.ipynb): tune IMSTE settings on a balanced MNIST subset and watch trial results live.
 - [tabula_sapiens_exp](notebooks/tabula_sapiens_exp.ipynb): load prepared Tabula Sapiens features and compare tissue and cell-type colorings on shared layouts.
 
 Prepare source data with the [arXiv](notebooks/dataset_setup/prepare_arxiv_dataset.ipynb), [CIFAR-100](notebooks/dataset_setup/prepare_cifar100_dataset.ipynb), and [Tabula Sapiens](notebooks/dataset_setup/prepare_tabula_sapiens_dataset.ipynb) setup notebooks.
