@@ -94,6 +94,29 @@ def _load_kmnist() -> tuple[np.ndarray, np.ndarray]:
     return _load_cached_image_arrays("Kuzushiji-MNIST", _download_kmnist_arrays)
 
 
+_MNIST_FAMILY_LOADERS = {
+    "MNIST": lambda: _load_openml("mnist_784"),
+    "Fashion-MNIST": lambda: _load_openml("Fashion-MNIST"),
+    "Kuzushiji-MNIST": _load_kmnist,
+}
+MNIST_FAMILY_DATASETS = tuple(_MNIST_FAMILY_LOADERS)
+
+
+def load_mnist_family_dataset(name: str) -> tuple[np.ndarray, np.ndarray]:
+    """Load one cached MNIST-family image dataset by its concise name."""
+    if name not in _MNIST_FAMILY_LOADERS:
+        choices = ", ".join(repr(value) for value in MNIST_FAMILY_DATASETS)
+        raise ValueError(f"Unknown dataset {name!r}; choose one of: {choices}.")
+    features, labels = _MNIST_FAMILY_LOADERS[name]()
+    features = np.asarray(features)
+    labels = np.asarray(labels)
+    if features.ndim != 2 or len(features) != len(labels):
+        raise ValueError(
+            f"Unexpected {name} shapes: features={features.shape}, labels={labels.shape}."
+        )
+    return features, labels
+
+
 def _download_kmnist_arrays() -> tuple[np.ndarray, np.ndarray]:
     base_url = "https://codh.rois.ac.jp/kmnist/dataset/kmnist"
 
@@ -113,17 +136,18 @@ def _download_kmnist_arrays() -> tuple[np.ndarray, np.ndarray]:
 
 
 def _load_datasets(max_samples: int, random_state: int):
-    loaders = {
-        "MNIST (28×28)": lambda: _load_openml("mnist_784"),
-        "Fashion-MNIST (28×28)": lambda: _load_openml("Fashion-MNIST"),
-        "Kuzushiji-MNIST (28×28)": _load_kmnist,
+    display_names = {
+        "MNIST": "MNIST (28×28)",
+        "Fashion-MNIST": "Fashion-MNIST (28×28)",
+        "Kuzushiji-MNIST": "Kuzushiji-MNIST (28×28)",
     }
     datasets = {}
     errors = {}
-    for name, loader in loaders.items():
+    for dataset_name in MNIST_FAMILY_DATASETS:
+        name = display_names[dataset_name]
         print(f"Loading {name} ...", flush=True)
         try:
-            raw_X, raw_labels = loader()
+            raw_X, raw_labels = load_mnist_family_dataset(dataset_name)
             X, labels = _stratified_sample(
                 raw_X,
                 raw_labels,

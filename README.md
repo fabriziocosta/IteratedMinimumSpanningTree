@@ -516,7 +516,7 @@ Active experiment notebooks use concise dataset-based names. Dataset setup noteb
 - [cifar100_exp](notebooks/cifar100_exp.ipynb): compare CIFAR-100 image embeddings with superclass hues and fine-class shades.
 - [interactive](notebooks/interactive.ipynb): interactively refine a balanced arXiv layout with gravity followed by mean shift.
 - [mnist_exp](notebooks/mnist_exp.ipynb): compare MNIST, Fashion-MNIST, and Kuzushiji-MNIST.
-- [tune_mnist](notebooks/tune_mnist.ipynb): tune IMSTE settings on a balanced MNIST subset and watch trial results live.
+- [tune_mnist](notebooks/tune_mnist.ipynb): choose MNIST, Fashion-MNIST, or Kuzushiji-MNIST, then tune IMSTE on a balanced sample and watch trial results live.
 - [tabula_sapiens_exp](notebooks/tabula_sapiens_exp.ipynb): load prepared Tabula Sapiens features and compare tissue and cell-type colorings on shared layouts.
 
 Prepare source data with the [arXiv](notebooks/dataset_setup/prepare_arxiv_dataset.ipynb), [CIFAR-100](notebooks/dataset_setup/prepare_cifar100_dataset.ipynb), and [Tabula Sapiens](notebooks/dataset_setup/prepare_tabula_sapiens_dataset.ipynb) setup notebooks.

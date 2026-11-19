@@ -12,7 +12,6 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from joblib import Parallel, delayed, parallel_config
-from sklearn.datasets import fetch_openml
 from sklearn.manifold import TSNE, trustworthiness
 from sklearn.model_selection import StratifiedKFold, cross_val_score
 from sklearn.neighbors import KNeighborsClassifier
@@ -26,25 +25,22 @@ if str(_project_root) not in sys.path:
 
 from imste import IteratedMinimumSpanningTreeEmbedder
 from imste.visualization import plot_embedding
-
-
-def _load_mnist_arrays():
-    """Load raw MNIST arrays from the project cache or OpenML."""
-    cache_file = _project_root / "data" / "mnist" / "cache" / "mnist_784_v1.npz"
-    if cache_file.exists():
-        with np.load(cache_file, allow_pickle=False) as cache:
-            X = np.asarray(cache["features"], dtype=np.float32)
-            labels = np.asarray(cache["labels"], dtype=np.int64)
-        return X, labels, str(cache_file)
-
-    mnist = fetch_openml(
-        "mnist_784", version=1, as_frame=False, parser="liac-arff", cache=True
+if __package__:
+    from .high_dim_mst_gallery import (
+        MNIST_FAMILY_DATASETS,
+        load_mnist_family_dataset,
     )
-    return (
-        np.asarray(mnist.data, dtype=np.float32),
-        np.asarray(mnist.target, dtype=np.int64),
-        "OpenML mnist_784",
+else:
+    from high_dim_mst_gallery import (
+        MNIST_FAMILY_DATASETS,
+        load_mnist_family_dataset,
     )
+
+
+def _load_mnist_arrays(dataset_name="MNIST"):
+    """Load raw features and labels for one MNIST-family dataset."""
+    X, labels = load_mnist_family_dataset(dataset_name)
+    return np.asarray(X, dtype=np.float32), np.asarray(labels, dtype=np.int64)
 
 
 def load_mnist_data(sample_size=2000, random_state=42):
@@ -59,7 +55,7 @@ def load_mnist_data(sample_size=2000, random_state=42):
         ) or sample_size < 10:
             raise ValueError("sample_size must be at least 10, or None for all MNIST rows.")
 
-    X, labels, _ = _load_mnist_arrays()
+    X, labels = _load_mnist_arrays()
 
     if sample_size is not None:
         if sample_size > len(X):
@@ -80,8 +76,12 @@ def load_mnist_data(sample_size=2000, random_state=42):
     return X, labels
 
 
-def load_mnist_per_class_data(samples_per_class=100, random_state=42):
-    """Load and standardize an exact, reproducible MNIST sample per digit.
+def load_mnist_per_class_data(
+    samples_per_class=100,
+    random_state=42,
+    dataset_name="MNIST",
+):
+    """Load and standardize a reproducible per-class MNIST-family sample.
 
     Returns ``(X, labels, info)``. The info mapping includes the data source,
     source row count, and sampled class counts.
@@ -91,7 +91,7 @@ def load_mnist_per_class_data(samples_per_class=100, random_state=42):
     ) or samples_per_class < 1:
         raise ValueError("samples_per_class must be a positive integer.")
 
-    X_all, labels_all, source = _load_mnist_arrays()
+    X_all, labels_all = _load_mnist_arrays(dataset_name)
     classes, class_counts = np.unique(labels_all, return_counts=True)
     if samples_per_class > int(class_counts.min()):
         raise ValueError(
@@ -108,7 +108,7 @@ def load_mnist_per_class_data(samples_per_class=100, random_state=42):
     X = StandardScaler().fit_transform(X_all[selected]).astype(np.float32)
     labels = labels_all[selected]
     info = {
-        "source": source,
+        "dataset": dataset_name,
         "source_rows": len(X_all),
         "samples_per_class": int(samples_per_class),
         "class_counts": pd.Series(labels).value_counts().sort_index().rename("images"),

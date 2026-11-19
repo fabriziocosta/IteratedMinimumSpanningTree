@@ -130,6 +130,7 @@ helper, as the MNIST tuning notebook does.
 
 `X` and `y` must have the same number of rows, and `y` must contain at least two
 classes with at least five examples in every class. `k` must fit within the
-smallest 5-fold training split. For MNIST, the notebook defaults to a balanced
-sample of 2,000 images per digit and reads the repository cache when available,
-falling back to OpenML otherwise.
+smallest 5-fold training split. The MNIST notebook lets you select MNIST,
+Fashion-MNIST, or Kuzushiji-MNIST and defaults to a balanced sample of 2,000
+images per class. It reads the repository cache when available and downloads
+the selected dataset otherwise.
