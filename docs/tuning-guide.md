@@ -74,8 +74,10 @@ choices. By default, `tune()` searches the following parameters and ranges:
 | `mean_shift_iterations` | `(0, 5)` | Integer |
 
 To use these defaults, omit `search_space`. A two-number tuple specifies
-inclusive numeric bounds. The estimator's current parameter type determines
-whether the search dimension is integer or continuous. A list specifies the
+inclusive numeric bounds. The estimator's declared default type determines
+whether the search dimension is integer or continuous. Parameters with a
+`None` default use their current value or, when that is also `None`, the tuple's
+endpoint types. A list specifies the
 exact values to try; use this for booleans, string-valued parameters, or a
 fixed set of numeric candidates. Tuples are reserved for bounds, and
 categorical choices must be written as lists. `n_components` is fixed at 2 and

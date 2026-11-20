@@ -1215,7 +1215,9 @@ class IteratedMinimumSpanningTreeEmbedder(
         used only to score that transductive embedding with shuffled,
         stratified five-fold cross-validation. Numeric ``(low, high)`` tuples
         define inclusive bounds, with integer or continuous dimensions inferred
-        from the current estimator parameter type. Lists define explicit values
+        from the estimator parameter's declared default type. Parameters with
+        a ``None`` default use their current value or the tuple endpoint types.
+        Lists define explicit values
         to try, including categorical choices; tuples are reserved for numeric
         bounds. If ``search_space`` is omitted, the search varies ``n_msts``
         from 3 to 30, ``learning_rate`` from 0.01 to 0.1, ``negative_ratio``

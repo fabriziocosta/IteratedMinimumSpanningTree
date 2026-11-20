@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import warnings
 from collections.abc import Mapping
+from inspect import Parameter, signature
 from numbers import Integral, Real as NumericReal
 from typing import TYPE_CHECKING, Callable
 
@@ -43,6 +44,7 @@ def _search_dimensions(estimator, search_space, Integer, RealDimension, Categori
         raise ValueError("search_space must be a non-empty mapping of parameter ranges.")
 
     estimator_parameters = estimator.get_params(deep=True)
+    constructor_parameters = signature(type(estimator).__init__).parameters
     names = list(search_space)
     dimensions = []
     for name, specification in search_space.items():
@@ -68,19 +70,34 @@ def _search_dimensions(estimator, search_space, Integer, RealDimension, Categori
             if not np.isfinite([low, high]).all() or low >= high:
                 raise ValueError(f"Bounds for {name!r} must be finite and increasing.")
             current = estimator_parameters[name]
-            if isinstance(current, (bool, np.bool_)):
+            constructor_parameter = constructor_parameters.get(name)
+            parameter_default = (
+                Parameter.empty
+                if constructor_parameter is None
+                else constructor_parameter.default
+            )
+            type_reference = (
+                parameter_default
+                if parameter_default is not Parameter.empty and parameter_default is not None
+                else current
+            )
+            if isinstance(type_reference, (bool, np.bool_)):
                 raise ValueError(
                     f"Boolean parameter {name!r} needs an explicit categorical list."
                 )
-            if isinstance(current, (Integral, np.integer)):
+            if isinstance(type_reference, (Integral, np.integer)):
                 if int(low) != low or int(high) != high:
                     raise ValueError(f"Integer parameter {name!r} requires integer bounds.")
                 dimensions.append(Integer(int(low), int(high), name=name))
-            elif current is None and all(
+            elif isinstance(type_reference, (NumericReal, np.floating)):
+                dimensions.append(RealDimension(float(low), float(high), name=name))
+            elif type_reference is None and all(
                 isinstance(value, Integral) for value in specification
             ):
                 dimensions.append(Integer(int(low), int(high), name=name))
-            elif isinstance(current, (NumericReal, np.floating)):
+            elif type_reference is None and all(
+                isinstance(value, NumericReal) for value in specification
+            ):
                 dimensions.append(RealDimension(float(low), float(high), name=name))
             else:
                 raise ValueError(
