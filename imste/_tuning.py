@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import warnings
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from numbers import Integral, Real as NumericReal
 from typing import TYPE_CHECKING, Callable
 
@@ -51,14 +51,18 @@ def _search_dimensions(estimator, search_space, Integer, RealDimension, Categori
         if name == "n_components":
             raise ValueError("n_components is fixed at 2 during tuning and cannot be searched.")
 
-        # A two-number tuple denotes bounds. Lists and other sequences denote
-        # explicit categorical choices, including for numeric parameters.
-        is_bounds = (
-            isinstance(specification, tuple)
-            and len(specification) == 2
-            and all(isinstance(value, NumericReal) and not isinstance(value, bool)
-                    for value in specification)
-        )
+        # Tuples denote numeric bounds; lists denote explicit choices.
+        if isinstance(specification, tuple) and (
+            len(specification) != 2
+            or not all(
+                isinstance(value, NumericReal) and not isinstance(value, bool)
+                for value in specification
+            )
+        ):
+            raise ValueError(
+                f"Tuple for {name!r} must contain exactly two numeric bounds."
+            )
+        is_bounds = isinstance(specification, tuple)
         if is_bounds:
             low, high = specification
             if not np.isfinite([low, high]).all() or low >= high:
@@ -83,12 +87,10 @@ def _search_dimensions(estimator, search_space, Integer, RealDimension, Categori
                     f"Numeric bounds for {name!r} require an integer or float estimator parameter."
                 )
         else:
-            if isinstance(specification, (str, bytes)) or not isinstance(
-                specification, Sequence
-            ) or len(specification) == 0:
+            if not isinstance(specification, list) or len(specification) == 0:
                 raise ValueError(
                     f"Range for {name!r} must be a numeric (low, high) tuple "
-                    "or a non-empty sequence of categorical choices."
+                    "or a non-empty list of categorical choices."
                 )
             dimensions.append(Categorical(list(specification), name=name))
     return names, dimensions

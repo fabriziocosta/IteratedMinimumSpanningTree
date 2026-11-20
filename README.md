@@ -117,9 +117,10 @@ Each trial fits an unsupervised embedding on all feature rows; labels are used
 only for scoring. With no `search_space`, it tunes `n_msts` (3–30),
 `learning_rate` (0.01–0.1), `negative_ratio` (1–10), `gravity_strength`
 (0.0–1.0), and `mean_shift_iterations` (0–5). Set `coverage_weight=0` to
-optimize accuracy alone. Numeric tuples are inclusive bounds, while lists are
-categorical choices. Integer or continuous dimensions are inferred from the
-current value of each estimator parameter. The default budget is 40 trials,
+optimize accuracy alone. A two-number tuple gives inclusive numeric bounds;
+the current estimator parameter type determines whether the dimension is
+integer or continuous. A list gives the exact values to try, including
+categorical choices. The default budget is 40 trials,
 with 20 initial Latin hypercube samples. The estimator's default
 `n_epochs=200` applies to each trial.
 

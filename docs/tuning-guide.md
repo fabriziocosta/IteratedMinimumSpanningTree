@@ -75,9 +75,11 @@ choices. By default, `tune()` searches the following parameters and ranges:
 
 To use these defaults, omit `search_space`. A two-number tuple specifies
 inclusive numeric bounds. The estimator's current parameter type determines
-whether the search dimension is integer or continuous. A list or other sequence
-specifies categorical choices; use this for booleans and string-valued
-parameters. `n_components` is fixed at 2 and cannot be searched.
+whether the search dimension is integer or continuous. A list specifies the
+exact values to try; use this for booleans, string-valued parameters, or a
+fixed set of numeric candidates. Tuples are reserved for bounds, and
+categorical choices must be written as lists. `n_components` is fixed at 2 and
+cannot be searched.
 
 ```python
 from imste import IteratedMinimumSpanningTreeEmbedder

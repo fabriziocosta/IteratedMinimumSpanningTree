@@ -1215,8 +1215,9 @@ class IteratedMinimumSpanningTreeEmbedder(
         used only to score that transductive embedding with shuffled,
         stratified five-fold cross-validation. Numeric ``(low, high)`` tuples
         define inclusive bounds, with integer or continuous dimensions inferred
-        from the current estimator parameter type. Sequences define categorical
-        choices. If ``search_space`` is omitted, the search varies ``n_msts``
+        from the current estimator parameter type. Lists define explicit values
+        to try, including categorical choices; tuples are reserved for numeric
+        bounds. If ``search_space`` is omitted, the search varies ``n_msts``
         from 3 to 30, ``learning_rate`` from 0.01 to 0.1, ``negative_ratio``
         from 1 to 10, ``gravity_strength`` from 0.0 to 1.0, and
         ``mean_shift_iterations`` from 0 to 5. The first
@@ -1251,8 +1252,8 @@ class IteratedMinimumSpanningTreeEmbedder(
         X, y : array-like
             Feature rows and corresponding single-output class labels.
         search_space : mapping
-            Estimator parameter names mapped to numeric ``(low, high)`` bounds
-            or categorical choice sequences. ``None`` uses defaults for
+            Estimator parameter names mapped to numeric ``(low, high)`` tuple
+            bounds or lists of explicit values to try. ``None`` uses defaults for
             ``n_msts`` (3–30), ``learning_rate`` (0.01–0.1), ``negative_ratio``
             (1–10), ``gravity_strength`` (0.0–1.0), and
             ``mean_shift_iterations`` (0–5).
