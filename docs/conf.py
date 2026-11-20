@@ -21,10 +21,12 @@ extensions = [
     "myst_parser",
     "sphinx.ext.autodoc",
     "sphinx.ext.intersphinx",
+    "sphinx.ext.mathjax",
     "sphinx.ext.napoleon",
     "sphinx.ext.viewcode",
     "sphinxcontrib.mermaid",
 ]
+myst_enable_extensions = ["dollarmath"]
 
 source_suffix = {".rst": "restructuredtext", ".md": "markdown"}
 root_doc = "index"
