@@ -16,6 +16,19 @@ The complete MNIST workflow, including live trial results, is in
 loading and display helpers are in
 [`notebooks/src/digits_sweep.py`](../notebooks/src/digits_sweep.py).
 
+## Plan for the compute cost
+
+The default search performs 40 full embedding fits and then one final fit of
+the selected settings. Every trial embeds all rows passed to `tune()`; the
+cross-validation scores labels in that embedding and does not refit IMSTE per
+fold. Cost therefore grows with both the dataset and number of trials. For an
+initial check, use a small representative dataset or a balanced subset and a
+shorter budget such as `n_samples=4, n_initial_points=4`. Keep at least five
+examples of each class in any subset because the default scoring uses 5-fold
+stratified cross-validation. The two-dimensional
+[getting-started example](getting-started.md) is a quick place to begin before
+moving to MNIST.
+
 ## What each trial scores
 
 For each parameter proposal, IMSTE fits one embedding on all rows in `X`.
@@ -88,7 +101,8 @@ estimator's `n_epochs` setting, which defaults to 200. The estimator's
 
 Each configuration fits IMSTE on the full supplied data, followed by one final
 fit of the selected configuration. Search cost therefore grows with the number
-of trials and the cost of an IMSTE fit.
+of trials and the cost of an IMSTE fit. Set `n_samples` and
+`n_initial_points` explicitly when you need a smaller experiment.
 
 ## Results and live progress
 

@@ -50,9 +50,11 @@ plt.show()
 ```
 
 `fit_transform` returns an array with shape `(n_samples, n_components)`. The
-labels in this example are used only to color points after fitting; IMSTE does
-not use them to construct the layout. Scale features when they use substantially
-different units or ranges.
+result here has shape `(1797, 2)`. In the plot, nearby points form the learned
+layout and color indicates the known digit class; IMSTE did not use the labels
+to construct those coordinates. The plot is an exploratory view rather than a
+guarantee that every class forms a separate cluster. Scale features when they
+use substantially different units or ranges.
 
 ## Choose the graph builder
 
@@ -83,7 +85,8 @@ details.
 returns fitted coordinates for the original rows in their original order. It
 does not project new observations. Install the `gpu` extra to use
 `InductiveIMSTE`, which fits an MLP to approximate a mapping from feature rows
-to embedding coordinates.
+to embedding coordinates. The [inductive guide](inductive-guide.md) explains
+how to train that mapping and check its predictions.
 
 ## Next steps
 

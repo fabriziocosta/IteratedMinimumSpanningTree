@@ -14,7 +14,7 @@ copyright = f"{datetime.now(timezone.utc).year}, {author}"
 try:
     release = version("imste")
 except PackageNotFoundError:
-    release = "0.8.4"
+    release = "0.8.5"
 version = release
 
 extensions = [

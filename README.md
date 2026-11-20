@@ -275,6 +275,9 @@ Z_train = mapper.transform(X_train)
 Import `InductiveIMSTE` from the explicit `imste.inductive` module. It fits a
 transductive IMSTE embedding, then trains an MLP to predict those coordinates:
 
+For installation, validation behavior, and when the projection is appropriate,
+see the [InductiveIMSTE guide](https://imste.readthedocs.io/en/latest/inductive-guide.html).
+
 ```python
 from imste import IteratedMinimumSpanningTreeEmbedder
 from imste.inductive import InductiveIMSTE

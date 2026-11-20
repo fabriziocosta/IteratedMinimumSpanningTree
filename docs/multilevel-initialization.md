@@ -40,6 +40,22 @@ flowchart TD
 
 The final optimization still uses the estimator's usual `n_epochs`, original ranked graph, and rank schedule. Multilevel epochs are additional work that prepares its initial coordinates.
 
+## Notation
+
+| Symbol | Meaning |
+| --- | --- |
+| $i$, $j$ | Vertices in the current graph |
+| $e$ | An edge between vertices $i$ and $j$ |
+| $r_e$ | Rank assigned to edge $e$ |
+| $a_e$ | Inverse-rank score, $1/r_e$ |
+| $N$ | Number of vertices at the current level |
+| $q$ | `multilevel_reduction_ratio` |
+| $C$ | A group label during label propagation |
+| $A$, $B$ | Two distinct groups in the quotient graph |
+| $g(i)$ | Group containing vertex $i$ |
+| $w_e$ | Edge weight used when expanding coordinates |
+| $y_C$ | Coordinate of group $C$ |
+
 ## Step 1: Give each graph edge a score
 
 For an edge with rank $r_e$, the score is its inverse rank:

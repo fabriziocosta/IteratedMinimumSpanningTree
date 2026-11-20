@@ -16,11 +16,19 @@ Estimators
    optional dependency with ``python -m pip install "imste[gpu]"``. This
    estimator fits a transductive IMSTE embedding, then learns an MLP to map
    input feature rows to approximate embedding coordinates. Its
-   ``reference_embedding_`` attribute holds the exact IMSTE coordinates.
+   ``reference_embedding_`` attribute holds the exact IMSTE coordinates;
+   ``transform`` always returns MLP predictions, including for training rows.
+   See the :doc:`inductive-guide` for a complete example and training details.
 
-   See the `README's inductive estimator guide
-   <https://github.com/fabriziocosta/IteratedMinimumSpanningTree#inductive-map-new-rows-with-an-mlp>`_
-   for the complete usage example and training behavior.
+   Parameters
+   ^^^^^^^^^^
+
+   * ``embedder``: transductive ``IteratedMinimumSpanningTreeEmbedder``
+     instance, or ``None`` to use its defaults.
+   * ``n_layers=6``, ``layer_size=128``, ``dropout=0.1``: MLP architecture.
+   * ``epochs=200``, ``min_epochs=100``, ``patience=20``: early-stopping
+     training budget.
+   * ``batch_size=256``, ``learning_rate=0.001``: MLP training settings.
 
 Functions
 ---------
