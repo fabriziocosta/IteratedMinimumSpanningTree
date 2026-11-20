@@ -10,6 +10,9 @@ builds a weighted graph from ranked minimum spanning trees, then optimizes one
 coordinate vector per sample. Optional `.preprocessor(...)` presets accept raw
 text, images, or graph objects and vectorize them before fitting IMSTE.
 
+Read the [documentation](https://imste.readthedocs.io/) for the getting-started
+guide, estimator API, and feature guides.
+
 The package has two explicit estimators: `IteratedMinimumSpanningTreeEmbedder`
 learns coordinates for the training rows, while `InductiveIMSTE` also learns
 an MLP that maps new rows into that space.

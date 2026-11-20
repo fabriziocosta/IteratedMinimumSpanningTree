@@ -13,7 +13,7 @@ The process has two phases:
 1. Build smaller graphs by grouping nearby vertices and combining the weights of edges between groups.
 2. Layout the smallest graph, then expand its coordinates back to the full graph and refine each level.
 
-```mermaid
+```{mermaid}
 flowchart TD
     A[Build the ranked IMSTE graph] --> B{Explicit init_coordinates supplied?}
     B -- Yes --> C[Use those coordinates]
@@ -90,7 +90,7 @@ $$
 
 The result, $W_{AB}$, is a direct attraction weight for the quotient edge. It is not a newly calculated MST rank.
 
-```mermaid
+```{mermaid}
 graph LR
     subgraph Fine[Fine graph]
         a((a)) ---|"0.5"| b((b))
@@ -120,7 +120,7 @@ The quotient graph becomes the input to the next coarsening level. The same step
 
 If no level reduced the original graph, the estimator uses its regular PCA or random initialization instead. If one or more levels did reduce it but a later level cannot, it uses the smallest graph reached so far.
 
-```mermaid
+```{mermaid}
 flowchart LR
     L0[Original graph] -->|coarsen| L1[Smaller graph]
     L1 -->|coarsen| L2[Smallest graph reached]
@@ -150,7 +150,7 @@ Here, $g(i)$ is the group containing vertex $i$, and $y_{g(j)}$ is the current c
 
 Then the optimizer refines that finer graph for `multilevel_epochs`. The same expansion and refinement steps repeat until coordinates exist for every original vertex.
 
-```mermaid
+```{mermaid}
 flowchart TD
     A[Coarse group coordinates] --> B[For each fine vertex, inspect crossing edges]
     B --> C{Has a neighbouring group?}

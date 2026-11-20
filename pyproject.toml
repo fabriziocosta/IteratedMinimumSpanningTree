@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "imste"
-version = "0.8.0"
+version = "0.8.1"
 description = "Iterated Minimum Spanning Tree Embedding (IMSTE)"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -36,7 +36,7 @@ dependencies = [
 Homepage = "https://github.com/fabriziocosta/IteratedMinimumSpanningTree"
 Repository = "https://github.com/fabriziocosta/IteratedMinimumSpanningTree"
 Issues = "https://github.com/fabriziocosta/IteratedMinimumSpanningTree/issues"
-Documentation = "https://github.com/fabriziocosta/IteratedMinimumSpanningTree/tree/main/docs"
+Documentation = "https://imste.readthedocs.io/"
 
 [project.optional-dependencies]
 gpu = ["torch>=2.0"]
