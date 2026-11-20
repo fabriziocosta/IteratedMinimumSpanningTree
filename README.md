@@ -536,6 +536,7 @@ optimization by passing an `IteratedMinimumSpanningTreeEmbedder` as `embedder`.
 - [MNIST-family experiment](notebooks/mnist_exp.ipynb): compare MNIST, Fashion-MNIST, and Kuzushiji-MNIST embeddings.
 - [MNIST tuning](notebooks/tune_mnist.ipynb): tune IMSTE on a balanced MNIST-family sample and inspect trial results.
 - [CIFAR-100 experiment](notebooks/cifar100_exp.ipynb): compare image embeddings with superclass and fine-class colorings.
+- [20 Newsgroups experiment](notebooks/20newsgroups_exp.ipynb): compare text embeddings with UMAP and IMSTE, colored by newsgroup.
 - [arXiv experiment](notebooks/arxiv_exp.ipynb): compare embeddings of the prepared arXiv sample.
 - [Interactive arXiv experiment](notebooks/interactive.ipynb): refine a balanced arXiv layout with gravity followed by mean shift.
 - [Biological experiment](notebooks/biological_exp.ipynb): inspect biological datasets and trajectories.
@@ -546,6 +547,7 @@ optimization by passing an `IteratedMinimumSpanningTreeEmbedder` as `embedder`.
 - [Prepare arXiv data](notebooks/dataset_setup/prepare_arxiv_dataset.ipynb)
 - [Prepare biological datasets](notebooks/dataset_setup/prepare_biological_datasets.ipynb)
 - [Prepare CIFAR-100 vectors](notebooks/dataset_setup/prepare_cifar100_dataset.ipynb)
+- [Prepare 20 Newsgroups vectors](notebooks/dataset_setup/prepare_20newsgroups_dataset.ipynb)
 - [Prepare Tabula Sapiens data](notebooks/dataset_setup/prepare_tabula_sapiens_dataset.ipynb)
 
 ### Other
