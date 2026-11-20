@@ -516,18 +516,33 @@ optimization by passing an `IteratedMinimumSpanningTreeEmbedder` as `embedder`.
 
 ## Notebooks
 
-Active experiment notebooks use concise dataset-based names. Dataset setup notebooks live in `notebooks/dataset_setup/`.
+### Tutorials and guides
 
-- [synthetic_exp](notebooks/synthetic_exp.ipynb): compare IMSTE and UMAP on controlled geometries.
-- [biological_exp](notebooks/biological_exp.ipynb): inspect annotated biological datasets and trajectories. Prepare its local inputs with [prepare_biological_datasets](notebooks/dataset_setup/prepare_biological_datasets.ipynb).
-- [arxiv_exp](notebooks/arxiv_exp.ipynb): compare embeddings of the prepared arXiv sample.
-- [cifar100_exp](notebooks/cifar100_exp.ipynb): compare CIFAR-100 image embeddings with superclass hues and fine-class shades.
-- [interactive](notebooks/interactive.ipynb): interactively refine a balanced arXiv layout with gravity followed by mean shift.
-- [mnist_exp](notebooks/mnist_exp.ipynb): compare MNIST, Fashion-MNIST, and Kuzushiji-MNIST.
-- [tune_mnist](notebooks/tune_mnist.ipynb): choose MNIST, Fashion-MNIST, or Kuzushiji-MNIST, then tune IMSTE on a balanced sample and watch trial results live.
-- [tabula_sapiens_exp](notebooks/tabula_sapiens_exp.ipynb): load prepared Tabula Sapiens features and compare tissue and cell-type colorings on shared layouts.
+- [IMSTE idea tutorial](notebooks/imste_idea_tutorial.ipynb): visualize successive MNIST minimum spanning trees and attraction/repulsion over training epochs.
+- [Visualization guide](notebooks/visualization_guide.ipynb): explore the public plotting helpers on MNIST embeddings.
+- [Preprocessing demo](notebooks/preprocessing_demo.ipynb): prepare raw text, images, and graph inputs before fitting IMSTE.
 
-Prepare source data with the [arXiv](notebooks/dataset_setup/prepare_arxiv_dataset.ipynb), [CIFAR-100](notebooks/dataset_setup/prepare_cifar100_dataset.ipynb), and [Tabula Sapiens](notebooks/dataset_setup/prepare_tabula_sapiens_dataset.ipynb) setup notebooks.
+### Experiments
+
+- [Synthetic experiment](notebooks/synthetic_exp.ipynb): compare IMSTE and UMAP on controlled geometries.
+- [MNIST-family experiment](notebooks/mnist_exp.ipynb): compare MNIST, Fashion-MNIST, and Kuzushiji-MNIST embeddings.
+- [MNIST tuning](notebooks/tune_mnist.ipynb): tune IMSTE on a balanced MNIST-family sample and inspect trial results.
+- [CIFAR-100 experiment](notebooks/cifar100_exp.ipynb): compare image embeddings with superclass and fine-class colorings.
+- [arXiv experiment](notebooks/arxiv_exp.ipynb): compare embeddings of the prepared arXiv sample.
+- [Interactive arXiv experiment](notebooks/interactive.ipynb): refine a balanced arXiv layout with gravity followed by mean shift.
+- [Biological experiment](notebooks/biological_exp.ipynb): inspect biological datasets and trajectories.
+- [Tabula Sapiens experiment](notebooks/tabula_sapiens_exp.ipynb): compare tissue and cell-type colorings on shared layouts.
+
+### Dataset setup
+
+- [Prepare arXiv data](notebooks/dataset_setup/prepare_arxiv_dataset.ipynb)
+- [Prepare biological datasets](notebooks/dataset_setup/prepare_biological_datasets.ipynb)
+- [Prepare CIFAR-100 vectors](notebooks/dataset_setup/prepare_cifar100_dataset.ipynb)
+- [Prepare Tabula Sapiens data](notebooks/dataset_setup/prepare_tabula_sapiens_dataset.ipynb)
+
+### Other
+
+- [Notebook test/scratch](notebooks/test.ipynb)
 
 Python helper modules used by the notebooks are in [notebooks/src](notebooks/src/).
 For the full method description and equations, see the
