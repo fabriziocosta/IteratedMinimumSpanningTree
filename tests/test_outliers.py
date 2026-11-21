@@ -80,14 +80,15 @@ def test_detect_outliers_uses_ten_dimensions_by_default(monkeypatch):
     fitted = {}
     expected_embedding = np.array([[0.0], [0.1], [0.2], [0.3], [10.0]])
 
-    def fake_fit_transform(self, X):
+    def fake_fit(self, X):
         fitted["n_components"] = self.n_components
-        return expected_embedding.copy()
+        self.embedding_ = expected_embedding.copy()
+        return self
 
     monkeypatch.setattr(
         estimator_module.IteratedMinimumSpanningTreeEmbedder,
-        "fit_transform",
-        fake_fit_transform,
+        "fit",
+        fake_fit,
     )
     monkeypatch.setattr(_outliers, "_fast_embedding_neighbors", _exact_embedding_neighbors)
 
@@ -108,14 +109,15 @@ def test_detect_outliers_allows_embedding_dimension_override(monkeypatch):
 
     seen = {}
 
-    def fake_fit_transform(self, X):
+    def fake_fit(self, X):
         seen["n_components"] = self.n_components
-        return np.array([[0.0], [1.0], [2.0]])
+        self.embedding_ = np.array([[0.0], [1.0], [2.0]])
+        return self
 
     monkeypatch.setattr(
         estimator_module.IteratedMinimumSpanningTreeEmbedder,
-        "fit_transform",
-        fake_fit_transform,
+        "fit",
+        fake_fit,
     )
     monkeypatch.setattr(_outliers, "_fast_embedding_neighbors", _exact_embedding_neighbors)
     detect_outliers(
@@ -124,6 +126,99 @@ def test_detect_outliers_allows_embedding_dimension_override(monkeypatch):
         estimator_params={"n_components": 3},
     )
     assert seen["n_components"] == 3
+
+
+def test_estimator_outliers_uses_instance_and_returns_it(monkeypatch):
+    import imste._estimator as estimator_module
+
+    embedding = np.array([[0.0], [0.1], [0.2], [0.3], [10.0]])
+    def fake_fit_transform(self, X):
+        self.embedding_ = embedding.copy()
+        return embedding.copy()
+
+    monkeypatch.setattr(
+        estimator_module.IteratedMinimumSpanningTreeEmbedder,
+        "fit_transform",
+        fake_fit_transform,
+    )
+    monkeypatch.setattr(_outliers, "_fast_embedding_neighbors", _exact_embedding_neighbors)
+    mapper = estimator_module.IteratedMinimumSpanningTreeEmbedder(n_components=5)
+
+    mapper.fit_transform(np.arange(10).reshape(5, 2))
+    result = mapper.outliers(k=2)
+
+    assert result.estimator is mapper
+    assert mapper.n_components == 5
+    np.testing.assert_array_equal(result.embedding, embedding)
+    np.testing.assert_array_equal(result.outlier_indices, [4])
+
+
+def test_estimator_outliers_requires_fitted_embedding():
+    from imste import IteratedMinimumSpanningTreeEmbedder
+
+    with pytest.raises(ValueError, match="Fit the estimator before calling outliers"):
+        IteratedMinimumSpanningTreeEmbedder().outliers(k=1)
+
+
+def test_estimator_outliers_averages_ranks_across_dimensions(monkeypatch):
+    import imste._estimator as estimator_module
+
+    input_rows = np.arange(8, dtype=float).reshape(4, 2)
+    embeddings = {
+        dimension: np.full((4, 1), dimension, dtype=float)
+        for dimension in (5, 10, 30)
+    }
+    rankings = {
+        5: np.array([0, 1, 2, 3]),
+        10: np.array([0, 2, 1, 3]),
+        30: np.array([0, 1, 3, 2]),
+    }
+    dimension_outliers = {
+        5: np.array([0, 3]),
+        10: np.array([0]),
+        30: np.array([0, 2]),
+    }
+
+    def fake_fit(self, X, y=None):
+        self.embedding_ = embeddings[self.n_components].copy()
+        self.X_fit_ = np.asarray(X).copy()
+        return self
+
+    def fake_score(embedding, k, *, random_state):
+        dimension = int(embedding[0, 0])
+        ranked = rankings[dimension]
+        scores = np.empty(len(ranked), dtype=float)
+        scores[ranked] = np.arange(len(ranked), 0, -1)
+        mutual = np.ones(len(ranked), dtype=np.int64)
+        mutual[dimension_outliers[dimension]] = 0
+        return scores, mutual, ranked.copy(), dimension_outliers[dimension].copy()
+
+    monkeypatch.setattr(estimator_module.IteratedMinimumSpanningTreeEmbedder, "fit", fake_fit)
+    monkeypatch.setattr(_outliers, "_score_embedding", fake_score)
+    mapper = estimator_module.IteratedMinimumSpanningTreeEmbedder(n_components=2)
+    mapper.X_fit_ = input_rows.copy()
+    mapper.embedding_ = np.zeros((4, 2))
+    original_embedding = mapper.embedding_.copy()
+
+    result = mapper.outliers(k=1, n_components=[5, 10, 30])
+
+    assert result.components == (5, 10, 30)
+    np.testing.assert_allclose(result.average_ranks, [1.0, 7 / 3, 3.0, 11 / 3])
+    np.testing.assert_array_equal(result.ranked_indices, [0, 1, 2, 3])
+    np.testing.assert_array_equal(result.outlier_frequency, [3, 0, 1, 1])
+    np.testing.assert_array_equal(result.outlier_indices, [0])
+    np.testing.assert_array_equal(mapper.embedding_, original_embedding)
+    assert mapper.n_components == 2
+
+
+@pytest.mark.parametrize("dimensions", [[], [2, 2], [2, 0], [2, True], "2,3"])
+def test_estimator_outliers_validates_component_list(dimensions):
+    from imste import IteratedMinimumSpanningTreeEmbedder
+
+    mapper = IteratedMinimumSpanningTreeEmbedder(n_components=2)
+    mapper.embedding_ = np.zeros((4, 2))
+    with pytest.raises(ValueError, match="n_components"):
+        mapper.outliers(k=1, n_components=dimensions)
 
 
 def test_detect_outliers_rejects_non_mapping_params():

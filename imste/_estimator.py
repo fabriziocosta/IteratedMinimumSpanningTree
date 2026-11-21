@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
+from typing import TYPE_CHECKING
 
 import numpy as np
 from scipy.sparse import csr_matrix, issparse
@@ -34,6 +35,9 @@ from .mst.prim import (
     _cosine_safe_normalize,
     iterated_prim_distance_edges as _iterated_mst_edges,
 )
+
+if TYPE_CHECKING:
+    from ._outliers import OutlierDetectionResult
 
 
 class IteratedMinimumSpanningTreeEmbedder(
@@ -1354,3 +1358,42 @@ class IteratedMinimumSpanningTreeEmbedder(
         if return_intermediate:
             return self.embedding_before_gravity_.copy(), self.embedding_.copy()
         return self.embedding_.copy()
+
+    def outliers(
+        self,
+        *,
+        k: int = 20,
+        n_components: int | Iterable[int] | None = None,
+        y: object = None,
+    ) -> "OutlierDetectionResult":
+        """Score local outliers in one or more embedding dimensions.
+
+        Fit this estimator first with ``fit`` or ``fit_transform``. Its
+        current fitted dimension is scored when ``n_components`` is omitted.
+        Supply an integer sequence to refit cloned estimators at those
+        dimensions and aggregate their anomaly rankings. The original fitted
+        estimator is not changed.
+
+        Parameters
+        ----------
+        k : int, default=20
+            Number of embedding-space neighbors used for LOF and reciprocal
+            neighbor counts.
+        n_components : int or sequence of int, default=None
+            Embedding dimensions to evaluate. ``None`` scores the current
+            fitted embedding. For example, ``[5, 10, 30]`` fits each dimension
+            and ranks samples by their mean LOF rank across those fits.
+        y : array-like, default=None
+            Labels to pass when refitting dimensions if ``label_strength`` is
+            positive. Labels are not needed to score the current embedding.
+
+        Returns
+        -------
+        OutlierDetectionResult
+            Aggregate ranks and diagnostics. The result's estimator, embedding,
+            LOF scores, and reciprocal-neighbor counts describe its first
+            requested dimension; this estimator remains unchanged.
+        """
+        from ._outliers import _outlier_result
+
+        return _outlier_result(self, k=k, n_components=n_components, y=y)

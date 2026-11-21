@@ -112,14 +112,16 @@ plt.scatter(embedding[:, 0], embedding[:, 1], c=digits.target, cmap="tab10", s=1
 
 ### Detect outliers in an IMSTE embedding
 
-`detect_outliers()` fits a 10-dimensional embedding by default, computes local
-outlier factor (LOF) scores from fast embedding-space neighbors, and reports
-rows with no reciprocal links among their `k` nearest neighbors:
+`mapper.outliers()` uses the estimator's configured embedding dimension,
+computes local outlier factor (LOF) scores from fast embedding-space neighbors,
+and reports rows with no reciprocal links among their `k` nearest neighbors:
 
 ```python
-from imste import detect_outliers
+from imste import IteratedMinimumSpanningTreeEmbedder
 
-result = detect_outliers(X, k=20, estimator_params={"n_epochs": 100})
+mapper = IteratedMinimumSpanningTreeEmbedder(n_components=10, n_epochs=100)
+embedding = mapper.fit_transform(X)
+result = mapper.outliers(k=20)
 top_candidates = result.ranked_indices[:100]
 outliers = result.outlier_indices
 ```
@@ -128,7 +130,8 @@ Higher `result.lof_scores` indicate lower local density relative to a sample's
 neighbors. `result.mutual_neighbor_counts` gives the reciprocal-link count for
 each input row, and `result.embedding` contains the fitted coordinates. See the
 [MNIST outlier detection notebook](notebooks/mnist_outlier_detection.ipynb) for
-a ranked image grid.
+a ranked image grid. The standalone `detect_outliers(X, ...)` convenience
+function is also available when you want the helper to construct the estimator.
 
 ### Tune a labeled 2D embedding
 

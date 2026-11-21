@@ -7,7 +7,7 @@ Estimators
 .. currentmodule:: imste
 
 .. autoclass:: IteratedMinimumSpanningTreeEmbedder
-   :members: fit, fit_transform, transform, fit_graph, fit_graph_transform, preprocessor, tune
+   :members: fit, fit_transform, transform, outliers, fit_graph, fit_graph_transform, preprocessor, tune
    :show-inheritance:
 
 .. py:class:: InductiveIMSTE
