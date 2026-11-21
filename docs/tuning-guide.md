@@ -1,9 +1,9 @@
 # Tuning IMSTE layouts for class separation and space use
 
 `IteratedMinimumSpanningTreeEmbedder.tune()` searches IMSTE parameters for a
-two-dimensional layout that balances label predictability with use of the
-plot area. It uses scikit-optimize's Gaussian-process search with Latin
-hypercube initial samples.
+two-dimensional layout that balances a selected classification score with
+use of the plot area. It accepts scikit-learn scorers and uses
+scikit-optimize's Gaussian-process search with Latin hypercube initial samples.
 
 Install the optional optimizer with:
 
@@ -24,8 +24,8 @@ cross-validation scores labels in that embedding and does not refit IMSTE per
 fold. Cost therefore grows with both the dataset and number of trials. For an
 initial check, use a small representative dataset or a balanced subset and a
 shorter budget such as `n_samples=4, n_initial_points=4`. Keep at least five
-examples of each class in any subset because the default scoring uses 5-fold
-stratified cross-validation. The two-dimensional
+examples of each class in any subset because tuning uses 5-fold stratified
+cross-validation. The two-dimensional
 [getting-started example](getting-started.md) is a quick place to begin before
 moving to MNIST.
 
@@ -33,22 +33,31 @@ moving to MNIST.
 
 With `label_strength=0`, each parameter proposal fits one unsupervised
 embedding on all rows in `X`. A 5-fold stratified CV evaluates a k-NN
-classifier using that embedding and `y`, with mean accuracy as the
-class-separation score. This is transductive: held-out feature rows were
-present when the embedding was fitted.
+classifier using the embedding and `y`. Choose `scoring` to select the
+classification metric; it accepts any scikit-learn scorer name or scorer
+callable. The shortcuts are:
+
+| `scoring` | Metric |
+| --- | --- |
+| `"accuracy"` | Accuracy (default) |
+| `"roc"` | Macro one-vs-rest ROC AUC |
+| `"apr"` | Average precision, macro-averaged for multiclass data |
+| `"f-score"` | Macro F1 score |
+
+For example, pass a scorer created with `sklearn.metrics.make_scorer`, or a
+built-in scorer name such as `"balanced_accuracy"` or `"f1_weighted"`.
 
 Set `label_strength` above zero to make tuning supervised. Each trial then
 fits five embeddings over all feature rows, masking each validation fold's
 labels from that fold's embedding fit. The k-NN classifier is trained on the
 fold's training coordinates and scored on its validation coordinates. Coverage
 is averaged over the five embeddings. This avoids using validation labels in
-the supervised attraction weights, while the feature rows remain transductive.
-If the best strength is positive, the final best-parameter refit uses all
-supplied labels. Searching
-`label_strength` over a range or list containing a positive value also enables
-this masked-fold protocol for every trial, including trials where the proposed
-strength is zero. Supervised tuning therefore costs about five embedding fits
-per trial rather than one.
+the supervised attraction weights, while feature rows remain transductive. If
+the best strength is positive, the final best-parameter refit uses all supplied
+labels. Searching `label_strength` over a range or list containing a positive
+value also enables this masked-fold protocol for every trial, including trials
+where the proposed strength is zero. Supervised tuning therefore costs about
+five embedding fits per trial rather than one.
 
 The second score measures robust spatial coverage without labels. The public
 `imste.spatial_coverage_score(embedding)` helper:
@@ -64,14 +73,12 @@ The second score measures robust spatial coverage without labels. The public
 The search maximizes this weighted score:
 
 ```text
-objective = (1 - coverage_weight) * accuracy + coverage_weight * coverage
+objective = (1 - coverage_weight) * scorer_value + coverage_weight * coverage
 ```
 
-The default `coverage_weight=0.4` gives accuracy 60% of the objective and
-coverage 40%. Set it to zero for accuracy-only tuning. A larger weight favors
-layouts that spread points more evenly across the plot, even when that costs
-some accuracy. The objective and both component scores are reported so this
-tradeoff remains visible.
+The default `coverage_weight=0.4` gives the selected metric 60% of the
+objective and coverage 40%. Set it to zero to optimize only the classification
+score. Each trial also records accuracy separately, whatever scorer is selected.
 
 ## Search space and budget
 
@@ -103,9 +110,10 @@ mapper = IteratedMinimumSpanningTreeEmbedder(
     random_state=42,
 )
 
-search = mapper.tune(X, y)
+search = mapper.tune(X, y, scoring="roc")
 
-print(search.best_accuracy, search.best_coverage, search.best_objective)
+print(search.scoring, search.best_score, search.best_accuracy)
+print(search.best_coverage, search.best_objective)
 embedding = mapper.embedding_
 ```
 
@@ -129,16 +137,19 @@ additional fields:
 | Field | Meaning |
 | --- | --- |
 | `best_params` | Parameter values selected by the combined objective |
-| `best_score` / `best_accuracy` | 5-fold accuracy for the selected configuration |
+| `best_score` | Selected scorer value for the best configuration |
+| `best_accuracy` | 5-fold accuracy for that configuration |
+| `scoring` | Resolved scorer shortcut/name |
 | `best_coverage` | Spatial coverage score for the selected configuration |
 | `best_objective` | Positive weighted score optimized by the search |
-| `cv_scores` | Accuracy for every trial |
+| `cv_scores` | Selected scorer value for every trial |
+| `accuracy_scores` | Accuracy for every trial |
 | `coverage_scores` | Coverage for every trial |
 | `objective_scores` | Positive weighted score for every trial |
 | `best_embedding` | Final refitted embedding |
 
 The estimator is refitted on all rows using `best_params`. Its corresponding
-attributes are `best_params_`, `best_score_`, `best_accuracy_`,
+attributes are `best_params_`, `best_score_` (selected scorer), `best_accuracy_`,
 `best_coverage_`, `best_objective_`, and `tune_result_`. The native
 scikit-optimize `result.fun` remains negative because the optimizer minimizes;
 use `best_objective` for the positive score.
@@ -147,8 +158,8 @@ use `best_objective` for the positive score.
 containing:
 
 - `trial`, `parameters`, and `embedding` for the current proposal
-- `accuracy` (also available as `score`), `coverage`, and `objective`
-- `best_accuracy` (also available as `best_score`), `best_coverage`,
+- `score` (selected scorer value), `accuracy`, `coverage`, and `objective`
+- `best_score`, `best_accuracy`, `best_coverage`,
   `best_objective`, and `best_params` for the best proposal so far
 - `is_best`, which is true when the current trial improves the combined score
 

@@ -135,9 +135,12 @@ function is also available when you want the helper to construct the estimator.
 
 ### Tune a labeled 2D embedding
 
-`tune()` searches estimator parameters using a combined score of 60% mean 5-fold
-k-NN accuracy and 40% robust spatial coverage. Coverage estimates how evenly
-points occupy a robustly scaled 2D grid, so a few outliers cannot dominate it.
+`tune()` searches estimator parameters using a combined score of 60% of a
+selected scikit-learn scorer and 40% robust spatial coverage. The default scorer
+is accuracy; shortcuts also include `"roc"`, `"apr"`, and `"f-score"`, and any
+scikit-learn scorer name or scorer callable can be passed. Coverage estimates
+how evenly points occupy a robustly scaled 2D grid, so a few outliers cannot
+dominate it.
 With `label_strength=0`, each trial fits an unsupervised embedding on all
 feature rows and uses labels only for scoring. When `label_strength` is
 positive, `tune()` masks each validation fold's labels while fitting a
@@ -146,8 +149,8 @@ about five embedding fits per trial. With no `search_space`, it tunes
 `n_msts` (3–30), `learning_rate` (0.01–0.1), `negative_ratio` (1–10),
 `gravity_strength`
 (0.0–1.0), and `mean_shift_iterations` (0–5). Set `coverage_weight=0` to
-optimize accuracy alone. A two-number tuple gives inclusive numeric bounds;
-the estimator's declared default type determines whether the dimension is
+optimize only the selected scorer. A two-number tuple gives inclusive numeric
+bounds; the estimator's declared default type determines whether the dimension is
 integer or continuous. Parameters with a `None` default use their current value
 or, when that is also `None`, the tuple's endpoint types. A list gives the
 exact values to try, including categorical choices. The default budget is 40 trials,
@@ -156,16 +159,16 @@ with 20 initial Latin hypercube samples. The estimator's default
 
 ```python
 mapper = IteratedMinimumSpanningTreeEmbedder(random_state=42)
-search = mapper.tune(X, digits.target)
+search = mapper.tune(X, digits.target, scoring="roc")
 
-print(search.best_params, search.best_score, search.best_coverage)
+print(search.best_params, search.best_score, search.best_accuracy)
 embedding = mapper.embedding_
 ```
 
 The best settings are refitted on all rows and stored on `mapper`; the returned
 scikit-optimize result contains the search history and final embedding.
-See the [tuning guide](docs/tuning-guide.md) for the combined accuracy and
-coverage objective, result fields, and live-progress callback.
+See the [tuning guide](docs/tuning-guide.md) for scorer shortcuts, the combined
+score and coverage objective, result fields, and live-progress callback.
 
 ### Fit from a distance graph
 

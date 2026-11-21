@@ -144,6 +144,7 @@ def make_live_tuning_display(labels, *, k=5, n_samples=40, figsize=(12, 8)):
     def show_trial(trial):
         rows.append({
             "trial": trial["trial"],
+            f"score ({trial['scoring']})": trial["score"],
             "accuracy": trial["accuracy"],
             "coverage": trial["coverage"],
             "objective": trial["objective"],
@@ -151,7 +152,8 @@ def make_live_tuning_display(labels, *, k=5, n_samples=40, figsize=(12, 8)):
             **trial["parameters"],
         })
         progress_handle.update(Markdown(
-            f"**Trial {trial['trial']}/{n_samples}** — accuracy: {trial['accuracy']:.3f}; "
+            f"**Trial {trial['trial']}/{n_samples}** — {trial['scoring']} score: "
+            f"{trial['score']:.3f}; accuracy: {trial['accuracy']:.3f}; "
             f"coverage: {trial['coverage']:.3f}; objective: {trial['objective']:.3f}; "
             f"best objective: {trial['best_objective']:.3f}"
         ))
@@ -164,6 +166,7 @@ def make_live_tuning_display(labels, *, k=5, n_samples=40, figsize=(12, 8)):
                 title=(
                     f"Best so far ({k}-NN): objective = "
                     f"{trial['best_objective']:.3f}; "
+                    f"{trial['scoring']} score = {trial['best_score']:.3f}; "
                     f"accuracy = {trial['best_accuracy']:.3f}; "
                     f"coverage = {trial['best_coverage']:.3f} "
                     f"(trial {trial['trial']})"

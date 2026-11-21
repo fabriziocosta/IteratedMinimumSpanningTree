@@ -1247,10 +1247,11 @@ class IteratedMinimumSpanningTreeEmbedder(
         n_samples: int = 40,
         n_initial_points: int = 20,
         coverage_weight: float = 0.4,
+        scoring: str | Callable = "accuracy",
         trial_callback: Callable[[dict[str, object]], None] | None = None,
         verbose: bool = False,
     ):
-        """Tune settings for k-NN accuracy and spatial coverage of a 2D layout.
+        """Tune settings for a classification scorer and spatial coverage.
 
         Each search trial fits IMSTE once on all rows in ``X``; labels are
         used only to score that transductive embedding with shuffled,
@@ -1268,11 +1269,16 @@ class IteratedMinimumSpanningTreeEmbedder(
         Latin hypercube sampling; remaining trials use Gaussian-process Bayesian
         optimization.
 
-        Trials maximize ``(1 - coverage_weight) * accuracy +
-        coverage_weight * spatial_coverage``. Spatial coverage is normalized
-        to [0, 1] from a robust, quantile-scaled 2D occupancy entropy score.
-        The default ``coverage_weight=0.4`` gives accuracy 60% of the objective;
-        set it to zero to tune accuracy alone.
+        Trials maximize ``(1 - coverage_weight) * score +
+        coverage_weight * spatial_coverage``. ``scoring`` accepts a
+        scikit-learn scorer name or scorer callable, plus the shortcuts
+        ``"accuracy"``, ``"roc"`` (macro one-vs-rest ROC AUC), ``"apr"``
+        (average precision), and ``"f-score"`` (macro F1). Spatial coverage
+        is normalized to [0, 1] from a robust, quantile-scaled 2D occupancy
+        entropy score.
+        The default ``coverage_weight=0.4`` gives the selected scorer 60% of the
+        objective; set it to zero to tune the scorer alone. Accuracy is also
+        recorded separately for every trial.
 
         ``trial_callback``, when supplied, is called after each completed trial
         with its accuracy, coverage and objective scores, the best-so-far
@@ -1286,8 +1292,9 @@ class IteratedMinimumSpanningTreeEmbedder(
         The best configuration is then fitted on all rows and stored on this
         estimator. The returned scikit-optimize ``OptimizeResult`` contains the
         separate trial metrics, the selected parameters, and final embedding.
-        ``best_score`` remains the selected trial's accuracy;
-        ``best_objective`` is the value optimized by Bayesian search.
+        ``best_score`` is the selected trial's requested scorer value, while
+        ``best_accuracy`` records its accuracy; ``best_objective`` is the value
+        optimized by Bayesian search.
         ``n_components`` is fixed to 2 during tuning.
 
         Parameters
@@ -1309,7 +1316,10 @@ class IteratedMinimumSpanningTreeEmbedder(
             Maximum number of initial Latin hypercube trials.
         coverage_weight : float, default=0.4
             Weight of spatial coverage in the combined objective, from zero to
-            one. Accuracy receives the remaining weight.
+            one. The selected scorer receives the remaining weight.
+        scoring : str or callable, default="accuracy"
+            Scikit-learn scorer name or scorer callable. Shortcuts are
+            ``"accuracy"``, ``"roc"``, ``"apr"``, and ``"f-score"``.
         trial_callback : callable or None, default=None
             Function receiving a trial-result dictionary after each evaluation.
         verbose : bool, default=False
@@ -1318,9 +1328,10 @@ class IteratedMinimumSpanningTreeEmbedder(
         Returns
         -------
         scikit-optimize OptimizeResult
-            Search history with accuracy, coverage and combined objective
-            scores, plus the best fitted embedding. The estimator exposes
-            ``best_params_``, ``best_score_``, ``best_coverage_``,
+            Search history with selected-scorer values, accuracy, coverage,
+            and combined objective scores, plus the best fitted embedding.
+            The estimator exposes ``best_params_``, ``best_score_`` (selected
+            scorer), ``best_accuracy_``, ``best_coverage_``,
             ``best_objective_``, and ``tune_result_``.
         """
         from ._tuning import tune_estimator
@@ -1334,6 +1345,7 @@ class IteratedMinimumSpanningTreeEmbedder(
             n_samples=n_samples,
             n_initial_points=n_initial_points,
             coverage_weight=coverage_weight,
+            scoring=scoring,
             trial_callback=trial_callback,
             verbose=verbose,
         )

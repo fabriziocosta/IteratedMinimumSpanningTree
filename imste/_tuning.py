@@ -10,8 +10,9 @@ from typing import TYPE_CHECKING, Callable
 
 import numpy as np
 from sklearn.base import clone
-from sklearn.model_selection import StratifiedKFold, cross_val_score
+from sklearn.model_selection import StratifiedKFold, cross_validate
 from sklearn.neighbors import KNeighborsClassifier
+from ._tuning_scoring import classifier_accuracy, resolve_scorer
 from sklearn.utils.validation import check_X_y
 
 if TYPE_CHECKING:
@@ -164,10 +165,11 @@ def tune_estimator(
     n_samples: int = 40,
     n_initial_points: int = 20,
     coverage_weight: float = 0.4,
+    scoring: str | Callable = "accuracy",
     trial_callback: Callable[[dict[str, object]], None] | None = None,
     verbose: bool = False,
 ):
-    """Search using CV accuracy combined with robust spatial coverage."""
+    """Search using a classification scorer combined with spatial coverage."""
     gp_minimize, Integer, Real, Categorical = _load_skopt()
 
     if isinstance(k, (bool, np.bool_)) or not isinstance(k, (Integral, np.integer)) or k < 1:
@@ -184,6 +186,7 @@ def tune_estimator(
             or not np.isfinite(coverage_weight)
             or not 0.0 <= coverage_weight <= 1.0):
         raise ValueError("coverage_weight must be a finite number in [0, 1].")
+    scorer, scoring_name = resolve_scorer(scoring)
     if trial_callback is not None and not callable(trial_callback):
         raise ValueError("trial_callback must be callable or None.")
     if not isinstance(verbose, (bool, np.bool_)):
@@ -223,21 +226,24 @@ def tune_estimator(
     )
     folds = list(cv.split(X_checked, y_checked))
     cv_scores: list[float] = []
+    accuracy_scores: list[float] = []
     coverage_scores: list[float] = []
     objective_scores: list[float] = []
     best_objective_so_far = -np.inf
+    best_score_so_far = -np.inf
     best_accuracy_so_far = -np.inf
     best_coverage_so_far = -np.inf
     best_parameters_so_far: dict[str, object] | None = None
 
     def objective(values):
-        nonlocal best_objective_so_far, best_accuracy_so_far
+        nonlocal best_objective_so_far, best_score_so_far, best_accuracy_so_far
         nonlocal best_coverage_so_far, best_parameters_so_far
         parameters = dict(zip(names, values))
         candidate = clone(estimator)
         candidate.set_params(n_components=2, **parameters)
         candidate.verbose = bool(verbose)
         if supervised_tuning:
+            fold_scores = []
             fold_accuracies = []
             fold_coverages = []
             embedding = None
@@ -255,39 +261,44 @@ def tune_estimator(
                 classifier.fit(
                     fold_embedding[training_indices], y_checked[training_indices]
                 )
+                validation_embedding = fold_embedding[validation_indices]
+                validation_labels = y_checked[validation_indices]
+                fold_scores.append(
+                    float(scorer(classifier, validation_embedding, validation_labels))
+                )
                 fold_accuracies.append(
-                    float(
-                        np.mean(
-                            classifier.predict(fold_embedding[validation_indices])
-                            == y_checked[validation_indices]
-                        )
-                    )
+                    classifier_accuracy(classifier, validation_embedding, validation_labels)
                 )
                 fold_coverages.append(spatial_coverage_score(fold_embedding))
+            score = float(np.mean(fold_scores))
             accuracy = float(np.mean(fold_accuracies))
             coverage = float(np.mean(fold_coverages))
         else:
             embedding = candidate.fit_transform(X_checked)
-            accuracy = float(
-                cross_val_score(
-                    KNeighborsClassifier(n_neighbors=int(k)),
-                    embedding,
-                    y_checked,
-                    cv=cv,
-                    scoring="accuracy",
-                ).mean()
+            classifier = KNeighborsClassifier(n_neighbors=int(k))
+            scores = cross_validate(
+                classifier,
+                embedding,
+                y_checked,
+                cv=cv,
+                scoring={"score": scorer, "accuracy": "accuracy"},
+                error_score="raise",
             )
+            score = float(np.mean(scores["test_score"]))
+            accuracy = float(np.mean(scores["test_accuracy"]))
             coverage = spatial_coverage_score(embedding)
         objective_score = (
-            (1.0 - float(coverage_weight)) * accuracy
+            (1.0 - float(coverage_weight)) * score
             + float(coverage_weight) * coverage
         )
-        cv_scores.append(accuracy)
+        cv_scores.append(score)
+        accuracy_scores.append(accuracy)
         coverage_scores.append(coverage)
         objective_scores.append(objective_score)
         is_best = objective_score > best_objective_so_far
         if is_best:
             best_objective_so_far = objective_score
+            best_score_so_far = score
             best_accuracy_so_far = accuracy
             best_coverage_so_far = coverage
             best_parameters_so_far = parameters.copy()
@@ -296,11 +307,12 @@ def tune_estimator(
                 {
                     "trial": len(cv_scores),
                     "parameters": parameters.copy(),
-                    "score": accuracy,
+                    "score": score,
+                    "scoring": scoring_name,
                     "accuracy": accuracy,
                     "coverage": coverage,
                     "objective": objective_score,
-                    "best_score": float(best_accuracy_so_far),
+                    "best_score": float(best_score_so_far),
                     "best_accuracy": float(best_accuracy_so_far),
                     "best_coverage": float(best_coverage_so_far),
                     "best_objective": float(best_objective_so_far),
@@ -348,7 +360,8 @@ def tune_estimator(
 
     result.best_params = best_parameters
     result.best_score = float(cv_scores[best_index])
-    result.best_accuracy = result.best_score
+    result.best_accuracy = float(accuracy_scores[best_index])
+    result.scoring = scoring_name
     result.best_coverage = float(coverage_scores[best_index])
     result.best_objective = float(objective_scores[best_index])
     result.coverage_weight = float(coverage_weight)
@@ -357,6 +370,7 @@ def tune_estimator(
     result.n_samples = int(n_samples)
     result.n_initial_points = initial_count
     result.cv_scores = np.asarray(cv_scores, dtype=float)
+    result.accuracy_scores = np.asarray(accuracy_scores, dtype=float)
     result.coverage_scores = np.asarray(coverage_scores, dtype=float)
     result.objective_scores = np.asarray(objective_scores, dtype=float)
     result.best_embedding = estimator.embedding_.copy()
