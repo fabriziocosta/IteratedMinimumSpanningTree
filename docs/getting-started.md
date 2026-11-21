@@ -72,6 +72,8 @@ different-class edges a factor of `exp(-label_strength / 2)`, before
 normalization. Edges touching `None` or NaN labels keep their ordinary
 inverse-rank weight. This changes edge attraction only; it does not add edges
 or directly repel different classes.
+See the dedicated [supervised embeddings guide](supervised-guide.md) for label
+requirements, unknown labels, and graph-based fits.
 
 ## Choose the graph builder
 
@@ -110,5 +112,7 @@ how to train that mapping and check its predictions.
 * [Preprocess raw text, images, and graph inputs](preprocessing-guide.md)
 * [Understand multilevel initialization](multilevel-initialization.md)
 * [Tune layouts for class separation and coverage](tuning-guide.md)
+* [Use labels to guide edge attraction](supervised-guide.md)
+* [Rank and inspect local outliers](outlier-detection.md)
 * [Explore visualization helpers](visualization-guide.md)
 * [Read the method overview](whitepaper.md)

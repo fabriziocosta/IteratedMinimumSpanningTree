@@ -28,6 +28,8 @@ Choose a path
 -------------
 
 * **Numeric feature rows:** :doc:`getting-started`
+* **Label-guided embeddings:** :doc:`supervised-guide`
+* **Outlier ranking:** :doc:`outlier-detection`
 * **New rows after fitting:** :doc:`inductive-guide`
 * **Text, images, or graph inputs:** :doc:`preprocessing-guide`
 * **A supplied sparse distance graph:** see :doc:`api`
@@ -46,6 +48,8 @@ default, exact Prim is available, and CPU optimization works without PyTorch.
 
    getting-started
    inductive-guide
+   supervised-guide
+   outlier-detection
 
 .. toctree::
    :maxdepth: 2

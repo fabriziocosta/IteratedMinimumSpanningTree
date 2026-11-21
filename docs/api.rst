@@ -37,6 +37,11 @@ Functions
 
 .. autofunction:: spatial_coverage_score
 
+.. autofunction:: detect_outliers
+
+.. autoclass:: OutlierDetectionResult
+   :members:
+
 Differentiable losses
 ---------------------
 

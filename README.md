@@ -110,6 +110,26 @@ embedding = mapper.fit_transform(X)
 plt.scatter(embedding[:, 0], embedding[:, 1], c=digits.target, cmap="tab10", s=10)
 ```
 
+### Detect outliers in an IMSTE embedding
+
+`detect_outliers()` fits a 10-dimensional embedding by default, computes local
+outlier factor (LOF) scores from fast embedding-space neighbors, and reports
+rows with no reciprocal links among their `k` nearest neighbors:
+
+```python
+from imste import detect_outliers
+
+result = detect_outliers(X, k=20, estimator_params={"n_epochs": 100})
+top_candidates = result.ranked_indices[:100]
+outliers = result.outlier_indices
+```
+
+Higher `result.lof_scores` indicate lower local density relative to a sample's
+neighbors. `result.mutual_neighbor_counts` gives the reciprocal-link count for
+each input row, and `result.embedding` contains the fitted coordinates. See the
+[MNIST outlier detection notebook](notebooks/mnist_outlier_detection.ipynb) for
+a ranked image grid.
+
 ### Tune a labeled 2D embedding
 
 `tune()` searches estimator parameters using a combined score of 60% mean 5-fold
@@ -560,6 +580,7 @@ optimization by passing an `IteratedMinimumSpanningTreeEmbedder` as `embedder`.
 - [Synthetic experiment](notebooks/synthetic_exp.ipynb): compare IMSTE and UMAP on controlled geometries.
 - [MNIST-family experiment](notebooks/mnist_exp.ipynb): compare MNIST, Fashion-MNIST, and Kuzushiji-MNIST embeddings.
 - [MNIST tuning](notebooks/tune_mnist.ipynb): tune IMSTE on a balanced MNIST-family sample and inspect trial results.
+- [MNIST outlier detection](notebooks/mnist_outlier_detection.ipynb): rank a balanced MNIST sample by LOF and inspect the top 100 images.
 - [CIFAR-100 experiment](notebooks/cifar100_exp.ipynb): compare image embeddings with superclass and fine-class colorings.
 - [20 Newsgroups experiment](notebooks/20newsgroups_exp.ipynb): compare text embeddings with UMAP and IMSTE, colored by newsgroup.
 - [arXiv experiment](notebooks/arxiv_exp.ipynb): compare embeddings of the prepared arXiv sample.
