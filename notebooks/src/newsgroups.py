@@ -296,6 +296,7 @@ def tune_20newsgroups_imste(
     max_per_category: int = 250,
     n_epochs: int = 80,
     n_trials: int = 40,
+    coverage_weight: float = 0.4,
     search_space: dict | None = None,
     base_settings: dict | None = None,
 ):
@@ -346,6 +347,7 @@ def tune_20newsgroups_imste(
         "n_epochs": n_epochs,
         "random_state": random_state,
         "metric": "euclidean",
+        "label_strength": 0.0,
         "gravity_strength": 0.075,
         "mean_shift_iterations": 2,
         "verbose": False,
@@ -360,7 +362,7 @@ def tune_20newsgroups_imste(
         search_space=search_space,
         n_samples=n_trials,
         n_initial_points=min(20, n_trials),
-        coverage_weight=0.4,
+        coverage_weight=coverage_weight,
         verbose=False,
     )
     return result, tune_indices
@@ -395,6 +397,7 @@ def fit_20newsgroups_imste(
     X: np.ndarray,
     random_state: int = 42,
     settings: dict | None = None,
+    labels: np.ndarray | None = None,
 ):
     """Fit IMSTE and return its coordinates, estimator, and stage timings."""
     import sys
@@ -425,6 +428,7 @@ def fit_20newsgroups_imste(
         "n_epochs": 200,
         "random_state": random_state,
         "metric": "euclidean",
+        "label_strength": 0.0,
         "gravity_strength": 0.075,
         "mean_shift_iterations": 2,
         "verbose": True,
@@ -433,7 +437,7 @@ def fit_20newsgroups_imste(
         imste_settings.update(settings)
     print("Fitting IMSTE (stage and epoch progress enabled)")
     estimator = IteratedMinimumSpanningTreeEmbedder(**imste_settings)
-    coordinates = estimator.fit_transform(X)
+    coordinates = estimator.fit_transform(X, y=labels)
     timings = {
         "imste": estimator.imste_fit_time_,
         "gravity": estimator.gravity_time_,

@@ -219,6 +219,7 @@ def make_umap(**parameters):
 def fit_and_align_embeddings(datasets, *, imste_params=None, umap_params=None):
     """Fit IMSTE/UMAP once per dataset and align UMAP using signed axis swaps."""
     imste_parameters = {"random_state": 42}
+    imste_parameters.setdefault("label_strength", 0.0)
     imste_parameters.update(imste_params or {})
     umap_parameters = {"random_state": 42}
     umap_parameters.update(umap_params or {})
@@ -227,7 +228,9 @@ def fit_and_align_embeddings(datasets, *, imste_params=None, umap_params=None):
     for name, data in datasets.items():
         X = data["X"]
         embeddings[name] = {
-            "IMSTE": make_imste(**imste_parameters).fit_transform(X),
+            "IMSTE": make_imste(**imste_parameters).fit_transform(
+                X, y=data["labels"]
+            ),
             "UMAP": make_umap(**umap_parameters).fit_transform(X),
         }
         embeddings[name]["UMAP"], alignment[name] = align_by_axis_flips(
@@ -518,7 +521,8 @@ def umap_sensitivity_metrics(
 
 
 def seed_robustness_metrics(
-    datasets, *, seeds=(7, 123), n_epochs=1000, n_msts=5, metric="euclidean"
+    datasets, *, seeds=(7, 123), n_epochs=1000, n_msts=5, metric="euclidean",
+    label_strength=0.0,
 ):
     rows = []
     for name, data in datasets.items():
@@ -527,12 +531,16 @@ def seed_robustness_metrics(
                 reducer = (
                     make_imste(
                         random_state=seed, n_epochs=n_epochs, n_msts=n_msts,
-                        metric=metric,
+                        metric=metric, label_strength=label_strength,
                     )
                     if method == "IMSTE"
                     else make_umap(random_state=seed, metric=metric)
                 )
-                coordinates = reducer.fit_transform(data["X"])
+                coordinates = (
+                    reducer.fit_transform(data["X"], y=data["labels"])
+                    if method == "IMSTE"
+                    else reducer.fit_transform(data["X"])
+                )
                 rho, tau, overlap = population_position_scores(data["X"], coordinates, data["labels"])
                 rows.append({
                     "dataset": name,

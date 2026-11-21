@@ -264,7 +264,11 @@ def optimize_embedding(
     progress_callback=None,
     timing_callback: Callable[[float, float], None] | None = None,
 ) -> None:
-    """Optimize in place using scheduled edges or explicit inverse-rank weights."""
+    """Optimize in place using rank scheduling or explicit edge weights.
+
+    With rank scheduling, optional edge weights are rank-independent
+    multipliers. Without scheduling, they are absolute attraction weights.
+    """
     n_samples = embedding.shape[0]
     edge_pairs = np.asarray(edges, dtype=np.int64)
     ranks = np.asarray(tree_ranks, dtype=np.int64)
@@ -283,11 +287,15 @@ def optimize_embedding(
         )
     use_edge_weights = edge_weights is not None
     phases = rank_phases(ranks, random_state)
-    expected_active_edges = (
-        float(np.sum(direct_weights))
-        if use_edge_weights
-        else expected_active_edge_count(ranks)
-    )
+    if use_edge_weights and schedule_by_rank:
+        # In rank-scheduled mode, edge_weights are rank-independent
+        # multipliers. Each rank-r edge is active once every r epochs.
+        expected_active_edges = float(np.sum(direct_weights / ranks))
+    elif use_edge_weights:
+        # Without rank scheduling, edge_weights are absolute edge weights.
+        expected_active_edges = float(np.sum(direct_weights))
+    else:
+        expected_active_edges = expected_active_edge_count(ranks)
     max_rank = int(np.max(ranks)) if ranks.size else 0
     rank_counts = np.bincount(ranks, minlength=max_rank + 1)
     rank_offsets = np.cumsum(rank_counts, dtype=np.int64)

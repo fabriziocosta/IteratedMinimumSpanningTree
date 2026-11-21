@@ -31,11 +31,24 @@ moving to MNIST.
 
 ## What each trial scores
 
-For each parameter proposal, IMSTE fits one embedding on all rows in `X`.
-The labels are not passed to the IMSTE fit. A 5-fold stratified CV evaluates a
-k-NN classifier using only that embedding and `y`, with the mean accuracy as
-the class-separation score. This is a transductive evaluation: feature rows in
-each held-out fold were present when the unsupervised embedding was fitted.
+With `label_strength=0`, each parameter proposal fits one unsupervised
+embedding on all rows in `X`. A 5-fold stratified CV evaluates a k-NN
+classifier using that embedding and `y`, with mean accuracy as the
+class-separation score. This is transductive: held-out feature rows were
+present when the embedding was fitted.
+
+Set `label_strength` above zero to make tuning supervised. Each trial then
+fits five embeddings over all feature rows, masking each validation fold's
+labels from that fold's embedding fit. The k-NN classifier is trained on the
+fold's training coordinates and scored on its validation coordinates. Coverage
+is averaged over the five embeddings. This avoids using validation labels in
+the supervised attraction weights, while the feature rows remain transductive.
+If the best strength is positive, the final best-parameter refit uses all
+supplied labels. Searching
+`label_strength` over a range or list containing a positive value also enables
+this masked-fold protocol for every trial, including trials where the proposed
+strength is zero. Supervised tuning therefore costs about five embedding fits
+per trial rather than one.
 
 The second score measures robust spatial coverage without labels. The public
 `imste.spatial_coverage_score(embedding)` helper:

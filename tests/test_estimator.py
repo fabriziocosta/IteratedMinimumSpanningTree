@@ -404,6 +404,30 @@ def test_inductive_projection_maps_training_and_unseen_rows():
     assert np.isfinite(estimator.training_loss_)
 
 
+def test_inductive_forwards_labels_to_supervised_reference_fit():
+    X = small_data()
+    y = np.array(["a", "a", "b", "b", "a"])
+    estimator = InductiveIMSTE(
+        embedder=IteratedMinimumSpanningTreeEmbedder(
+            n_msts=1,
+            n_epochs=0,
+            label_strength=0.4,
+            multilevel_init=False,
+            random_state=13,
+        ),
+        n_layers=1,
+        layer_size=4,
+        dropout=0.0,
+        epochs=2,
+        min_epochs=1,
+        patience=1,
+        batch_size=2,
+    ).fit(X, y=y)
+
+    assert estimator.embedder_.label_strength == 0.4
+    assert estimator.embedder_.optimization_edge_weights_.sum() == pytest.approx(1.0)
+
+
 def test_dataframe_transform_rejects_reordered_feature_names():
     pd = pytest.importorskip("pandas")
     X = pd.DataFrame(small_data(), columns=["left", "right"])
@@ -751,3 +775,62 @@ def test_graph_ranks_preserve_inverse_rank_weights():
     np.testing.assert_array_equal(
         estimator.graph_weights_, 1.0 / estimator.graph_ranks_
     )
+
+
+def test_label_strength_reweights_existing_edges_and_normalizes_weights():
+    X = small_data()
+    y = np.array(["a", "a", "b", None, "a"], dtype=object)
+    strength = np.log(4.0)
+    estimator = IteratedMinimumSpanningTreeEmbedder(
+        n_msts=2,
+        n_epochs=0,
+        mst_method="prim",
+        multilevel_init=False,
+        label_strength=strength,
+        random_state=5,
+    ).fit(X, y=y)
+
+    expected = estimator.graph_weights_.copy()
+    for edge_index, (left, right) in enumerate(estimator.graph_edges_):
+        if y[left] is None or y[right] is None:
+            continue
+        expected[edge_index] *= 2.0 if y[left] == y[right] else 0.5
+    expected /= expected.sum()
+    np.testing.assert_allclose(estimator.optimization_edge_weights_, expected)
+    np.testing.assert_array_equal(
+        estimator.graph_weights_, 1.0 / estimator.graph_ranks_
+    )
+
+
+def test_label_strength_requires_valid_labels():
+    X = small_data()
+    estimator = IteratedMinimumSpanningTreeEmbedder(
+        n_msts=1, n_epochs=0, label_strength=0.5
+    )
+    with pytest.raises(ValueError, match="y is required"):
+        estimator.fit(X)
+    with pytest.raises(ValueError, match="one-dimensional"):
+        estimator.fit(X, y=np.zeros((len(X), 1)))
+    with pytest.raises(ValueError, match="one label per sample"):
+        estimator.fit(X, y=np.zeros(len(X) - 1))
+
+
+def test_fit_graph_accepts_labels_for_supervised_edge_weights():
+    graph = sparse.csr_matrix(
+        np.array(
+            [
+                [0.0, 1.0, 3.0],
+                [1.0, 0.0, 2.0],
+                [3.0, 2.0, 0.0],
+            ]
+        )
+    )
+    estimator = IteratedMinimumSpanningTreeEmbedder(
+        n_msts=1,
+        n_epochs=0,
+        label_strength=0.4,
+        multilevel_init=False,
+        random_state=7,
+    ).fit_graph(graph, y=["a", "a", "b"])
+    assert estimator.optimization_edge_weights_.shape == estimator.graph_weights_.shape
+    assert np.isclose(estimator.optimization_edge_weights_.sum(), 1.0)

@@ -13,6 +13,7 @@ from ._estimator import IteratedMinimumSpanningTreeEmbedder
 def fit_graph_transform(
     distance_graph: spmatrix,
     *,
+    y: object | None = None,
     X: object | None = None,
     init_features: object | None = None,
     **estimator_params: Any,
@@ -21,14 +22,16 @@ def fit_graph_transform(
 
     If ``X`` is supplied, IMSTE first embeds those features, then uses that
     layout to initialize optimization over ``distance_graph``. The graph
-    determines the final optimization objective. Alternatively,
-    ``init_features`` supplies features for standardized-PCA initialization.
-    These two initialization options cannot be combined. Remaining keyword
-    arguments configure the estimator.
+    determines the final optimization objective. If ``label_strength`` is
+    positive, ``y`` supplies one categorical label per graph node.
+    Alternatively, ``init_features`` supplies features for standardized-PCA
+    initialization. These two initialization options cannot be combined.
+    Remaining keyword arguments configure the estimator.
     """
     estimator = IteratedMinimumSpanningTreeEmbedder(**estimator_params)
     return estimator.fit_graph_transform(
         distance_graph,
+        y=y,
         X=X,
         init_features=init_features,
     )

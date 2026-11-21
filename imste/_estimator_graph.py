@@ -19,6 +19,7 @@ class _EstimatorGraphMethods:
         self,
         distance_graph: sparse.spmatrix,
         *,
+        y: object | None = None,
         init_features: object | None = None,
         init_coordinates: object | None = None,
     ) -> "IteratedMinimumSpanningTreeEmbedder":
@@ -32,6 +33,8 @@ class _EstimatorGraphMethods:
         short edges when necessary and increase their ranks, which reduces
         their attraction weights.
 
+        When ``label_strength`` is positive, ``y`` supplies one categorical
+        label per graph node; ``None`` and NaN labels are treated as unknown.
         ``init_features`` optionally supplies the sample-by-feature matrix used
         for standardized PCA initialization. ``init_coordinates`` can instead
         supply a complete initial embedding with one row per graph node and one
@@ -102,6 +105,7 @@ class _EstimatorGraphMethods:
             fit_started=fit_started,
             resolved_device=options["resolved_device"],
             schedule_by_rank=True,
+            labels=y,
             initialization_features=initialization_features,
             initial_coordinates=graph_initial_coordinates,
             **{
@@ -198,6 +202,7 @@ class _EstimatorGraphMethods:
         self,
         distance_graph: sparse.spmatrix,
         *,
+        y: object | None = None,
         X: object | None = None,
         init_features: object | None = None,
     ) -> np.ndarray:
@@ -205,12 +210,13 @@ class _EstimatorGraphMethods:
 
         If ``X`` is supplied, fit IMSTE to ``X`` first and use that embedding
         to initialize optimization over ``distance_graph``. The graph remains
-        the objective for the final fit. ``init_features`` retains the direct
-        standardized-PCA initialization behavior of :meth:`fit_graph` and
-        cannot be combined with ``X``.
+        the objective for the final fit. When ``label_strength`` is positive,
+        ``y`` adjusts attraction weights in both fits. ``init_features``
+        retains the direct standardized-PCA initialization behavior of
+        :meth:`fit_graph` and cannot be combined with ``X``.
         """
         if X is None:
-            self.fit_graph(distance_graph, init_features=init_features)
+            self.fit_graph(distance_graph, y=y, init_features=init_features)
             return self.embedding_.copy()
         if init_features is not None:
             raise ValueError("Pass either X or init_features, not both.")
@@ -228,8 +234,8 @@ class _EstimatorGraphMethods:
         if X_checked.shape[0] != distance_graph.shape[0]:
             raise ValueError("X must have one row per distance_graph node.")
         feature_estimator = clone(self)
-        initialization = feature_estimator.fit_transform(X_checked)
-        self.fit_graph(distance_graph, init_coordinates=initialization)
+        initialization = feature_estimator.fit_transform(X_checked, y=y)
+        self.fit_graph(distance_graph, y=y, init_coordinates=initialization)
         return self.embedding_.copy()
 
     def transform(self, X: object) -> np.ndarray:

@@ -2,9 +2,10 @@
 
 ## Abstract
 
-Iterated Minimum Spanning Tree Embedding (IMSTE) is an unsupervised method for
-placing a finite set of high-dimensional observations in a lower-dimensional
-coordinate space. It builds a weighted graph from ranked spanning-tree
+Iterated Minimum Spanning Tree Embedding (IMSTE) places a finite set of
+high-dimensional observations in a lower-dimensional coordinate space. By
+default it is unsupervised; an optional label strength adjusts weights on
+existing graph edges. It builds a weighted graph from ranked spanning-tree
 iterations. Earlier trees use shorter connections where possible; later trees
 prefer unused edges and reuse bottleneck edges when needed to connect the
 residual graph. A rank-based weight controls the influence of each edge. The
@@ -14,10 +15,10 @@ together with a sampled repulsive loss on non-edges.
 The method is deliberately direct. It uses Euclidean distances, ranked
 spanning-tree construction, and a small differentiable objective. The default
 FAMST backend builds an approximate sparse candidate graph; exact Prim is also
-available. The core estimator does not use class labels or define an
-out-of-sample projection. An optional `InductiveIMSTE` wrapper learns an
-approximate MLP projection. This paper describes the implementation in this
-repository and its practical limits; it makes no claim that the method is a
+available. The core estimator accepts optional class labels to reweight
+existing edges and does not define an out-of-sample projection. An optional
+`InductiveIMSTE` wrapper learns an approximate MLP projection. This paper
+describes the implementation in this repository and its practical limits; it makes no claim that the method is a
 drop-in replacement for established embedding methods.
 
 ## 1. Motivation and scope
@@ -31,7 +32,8 @@ when a bottleneck requires reuse, the edge's rank increases and its attraction
 weight decreases.
 
 The core estimator is intended for exploratory visualization and geometric
-inspection of a fixed dataset. It returns learned coordinates for training
+inspection of a fixed dataset. Optional labels adjust edge weights without
+changing graph construction. It returns learned coordinates for training
 rows, and its `transform` method accepts only those same rows in their original
 order. `InductiveIMSTE` can approximate coordinates for new rows with a
 separately trained MLP.
@@ -83,6 +85,24 @@ $$
 The edge weight depends on its tree rank, not on a separately applied distance
 decay.
 
+An optional supervised fit accepts one categorical label $c_i$ per row. For
+edge $(i,j)$, its effective weight is:
+
+$$
+\widetilde{w}_{ij}=\frac{1}{r_{ij}}
+\begin{cases}
+\exp(\eta/2) & c_i=c_j,\\
+\exp(-\eta/2) & c_i\ne c_j,\\
+1 & \text{if either label is unknown},
+\end{cases}
+$$
+
+where `label_strength` $\eta\ge0$. The weights are normalized by their sum
+in the attraction objective. Thus $\eta=0$ is the unsupervised objective,
+while positive values strengthen same-class attraction and weaken
+different-class attraction without adding or removing edges. `None` and NaN
+labels are treated as unknown.
+
 For connected feature-based input, when all requested iterations succeed, the
 graph stores $R(n-1)$ edge occurrences. Reused bottleneck edges mean the number
 of distinct undirected edges can be smaller. FAMST increases its neighbor count
@@ -127,26 +147,25 @@ The attractive term is
 
 $$
 L_{\mathrm{attr}}=
-\frac{1}{\sum_{(i,j)\in E}w_{ij}}\sum_{(i,j)\in E}
-w_{ij}\bigl[-\log(q_{ij})\bigr]
-=\frac{1}{\sum_{(i,j)\in E}w_{ij}}\sum_{(i,j)\in E}
-w_{ij}\log(1+z_{ij}+\epsilon).
+\frac{1}{\sum_{(i,j)\in E}\widetilde{w}_{ij}}\sum_{(i,j)\in E}
+\widetilde{w}_{ij}\bigl[-\log(q_{ij})\bigr]
+=\frac{1}{\sum_{(i,j)\in E}\widetilde{w}_{ij}}\sum_{(i,j)\in E}
+\widetilde{w}_{ij}\log(1+z_{ij}+\epsilon).
 $$
 
-Minimizing it brings graph-connected samples together. The MST-rank weight
-applies to positive edges only.
+Minimizing it brings graph-connected samples together. The effective edge
+weight applies to positive edges only.
 
-For approximate FAMST graphs, the normalized rank-weighted objective can be
-estimated by activating a rank $r$ edge once every $r$ epochs and using
-rank-independent updates while it is active. Deterministic phases spread the
-higher-rank updates across epochs. Exact Prim instead processes every edge in
-every epoch and multiplies each attraction update by its explicit inverse-rank
-weight $1/r_{ij}$. Both modes divide positive updates by
-$\sum_{(i,j)\in E}1/r_{ij}$; negative updates are normalized by the eligible
-sampled-pair count for that epoch.
+For approximate FAMST graphs, the normalized weighted objective can be
+estimated by activating a rank $r$ edge once every $r$ epochs and using its
+label multiplier while active. Deterministic phases spread the higher-rank
+updates across epochs. Exact Prim instead processes every edge in every epoch
+and multiplies each attraction update by its effective weight. Both modes
+divide positive updates by $\sum_{(i,j)\in E}\widetilde{w}_{ij}$; negative
+updates are normalized by the eligible sampled-pair count for that epoch.
 
 This logarithmic objective is the only built-in attraction. It always acts on
-squared Euclidean distances and uses the same edge weights and weight-sum
+squared Euclidean distances and uses the edge weights and weight-sum
 normalization described above.
 
 ### 4.2 Repulsion on sampled non-edges
@@ -216,11 +235,13 @@ batch size controls memory use and update grouping; CPU runs ignore it.
 The estimator uses Euclidean distance for graph construction and squared
 Euclidean distance in the embedding objective. Rank $r$ determines update
 frequency; `graph_weights_` remains available as the corresponding $1/r$
-diagnostic.
+diagnostic. `optimization_edge_weights_` reports the normalized effective
+weights used by optimization.
 
 | Parameter | Default | Role |
 | --- | ---: | --- |
 | `n_msts` | 15 | Number of spanning-tree iterations; bottleneck edges can be reused with increased rank |
+| `label_strength` | 0.0 | Exponential same-class and different-class attraction reweighting; pass `y` to `fit` when positive |
 | `mst_method` | `famst` | Approximate sparse FAMST trees or exact Prim trees |
 | `mst_neighbor_backend` | `auto` | FAMST neighbor search: prefer RINND when compatible, or select PyNNDescent / exact MPS search |
 | `mst_neighbors` | 15 | Initial FAMST neighbor count; the builder targets at least `2 * n_msts` |

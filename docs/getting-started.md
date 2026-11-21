@@ -51,10 +51,27 @@ plt.show()
 
 `fit_transform` returns an array with shape `(n_samples, n_components)`. The
 result here has shape `(1797, 2)`. In the plot, nearby points form the learned
-layout and color indicates the known digit class; IMSTE did not use the labels
-to construct those coordinates. The plot is an exploratory view rather than a
-guarantee that every class forms a separate cluster. Scale features when they
-use substantially different units or ranges.
+layout and color indicates the known digit class. With the default
+`label_strength=0`, IMSTE did not use those labels to construct the coordinates.
+The plot is an exploratory view rather than a guarantee that every class forms
+a separate cluster. Scale features when they use substantially different
+units or ranges.
+
+To let known classes guide the MST edge attraction, pass labels as `y` and set
+`label_strength` above zero:
+
+```python
+supervised_mapper = IteratedMinimumSpanningTreeEmbedder(
+    label_strength=0.6, random_state=42
+)
+supervised_embedding = supervised_mapper.fit_transform(X, y=digits.target)
+```
+
+Same-class edges receive a factor of `exp(label_strength / 2)` and
+different-class edges a factor of `exp(-label_strength / 2)`, before
+normalization. Edges touching `None` or NaN labels keep their ordinary
+inverse-rank weight. This changes edge attraction only; it does not add edges
+or directly repel different classes.
 
 ## Choose the graph builder
 

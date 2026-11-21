@@ -65,6 +65,42 @@ def test_expected_active_count_matches_inverse_rank_objective_normalizer():
     assert np.isclose(expected_active_edge_count(ranks), expected)
 
 
+def test_rank_scheduled_multipliers_use_weighted_inverse_rank_normalizer(monkeypatch):
+    import imste._optimizer as optimizer_module
+
+    observed = {}
+
+    def capture_updates(*args):
+        observed["expected_active_edges"] = args[7]
+        observed["edge_weights"] = args[15]
+        observed["use_edge_weights"] = args[16]
+
+    monkeypatch.setattr(optimizer_module, "_apply_epoch_updates", capture_updates)
+    ranks = np.array([1, 2, 3], dtype=np.int32)
+    multipliers = np.array([1.0, 2.0, 0.5])
+    optimize_embedding(
+        np.array([[0.0], [1.0], [2.0], [3.0]], dtype=np.float32),
+        np.array([[0, 1], [1, 2], [2, 3]], dtype=np.int64),
+        ranks,
+        n_epochs=1,
+        learning_rate=0.1,
+        negative_ratio=0,
+        lambda_rep=0.0,
+        epsilon=1e-4,
+        margin=1.0,
+        temperature=0.5,
+        random_state=3,
+        schedule_by_rank=True,
+        edge_weights=multipliers,
+    )
+
+    assert observed["expected_active_edges"] == pytest.approx(
+        np.sum(multipliers / ranks)
+    )
+    np.testing.assert_array_equal(observed["edge_weights"], multipliers)
+    assert observed["use_edge_weights"] is True
+
+
 def test_dense_neighbor_complement_ordinals_skip_self_and_blocked_nodes():
     n_samples = 7
     source = 3

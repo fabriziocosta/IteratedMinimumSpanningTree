@@ -77,10 +77,12 @@ Edges are treated as undirected, and reciprocal entries use the smaller
 distance. Disconnected components remain separate spanning forests. Each
 iteration prefers unused edges; when needed, it reuses short edges and
 increments their rank. The optimizer uses the usual inverse-rank attraction
-weights. Optionally pass `init_features` with one feature row per graph node to
-seed the coordinates from standardized PCA scores. These features affect only
-initialization; the supplied graph remains the optimizer's objective. Without
-`init_features`, seeded random initialization is used. Use `fit_graph()` when
+weights. With positive `label_strength`, pass `y` with one class label per
+graph node to adjust those weights. Optionally pass `init_features` with one
+feature row per graph node to seed the coordinates from standardized PCA
+scores. These features affect only initialization; the supplied graph remains
+the optimizer's objective. Without `init_features`, seeded random
+initialization is used. Use `fit_graph()` when
 you need the fitted estimator and `fit_graph_transform()` when you only need
 the embedding array.
 
@@ -113,9 +115,13 @@ plt.scatter(embedding[:, 0], embedding[:, 1], c=digits.target, cmap="tab10", s=1
 `tune()` searches estimator parameters using a combined score of 60% mean 5-fold
 k-NN accuracy and 40% robust spatial coverage. Coverage estimates how evenly
 points occupy a robustly scaled 2D grid, so a few outliers cannot dominate it.
-Each trial fits an unsupervised embedding on all feature rows; labels are used
-only for scoring. With no `search_space`, it tunes `n_msts` (3–30),
-`learning_rate` (0.01–0.1), `negative_ratio` (1–10), `gravity_strength`
+With `label_strength=0`, each trial fits an unsupervised embedding on all
+feature rows and uses labels only for scoring. When `label_strength` is
+positive, `tune()` masks each validation fold's labels while fitting a
+transductive embedding over all feature rows, then scores that fold. This costs
+about five embedding fits per trial. With no `search_space`, it tunes
+`n_msts` (3–30), `learning_rate` (0.01–0.1), `negative_ratio` (1–10),
+`gravity_strength`
 (0.0–1.0), and `mean_shift_iterations` (0–5). Set `coverage_weight=0` to
 optimize accuracy alone. A two-number tuple gives inclusive numeric bounds;
 the estimator's declared default type determines whether the dimension is
@@ -213,8 +219,22 @@ and can change neighborhood fidelity. The
 compares this option with PCA/multilevel and UMAP-warm-start initializations on
 a deterministic, class-balanced subset.
 
-The labels are not passed to the estimator. Use them afterward to color or
-score a visualization if needed.
+By default, the labels are not used to construct the embedding. To let labels
+guide edge attraction, set `label_strength` above zero and pass labels as `y`:
+
+```python
+supervised = IteratedMinimumSpanningTreeEmbedder(
+    label_strength=0.6, random_state=42
+)
+embedding = supervised.fit_transform(X, y=digits.target)
+```
+
+For an edge of rank `r`, IMSTE multiplies its usual `1 / r` weight by
+`exp(label_strength / 2)` when both labels match, or by
+`exp(-label_strength / 2)` when they differ. Edges touching a `None` or NaN
+label keep their usual weight. `label_strength=0` preserves unsupervised
+behavior. Labels adjust attraction only; they do not add graph edges or
+directly repel different classes.
 
 ## How it works
 
@@ -228,7 +248,9 @@ weight. For the approximate FAMST graph, an edge of rank `r` is scheduled once
 every `r` epochs on average. Exact Prim processes every edge each epoch and
 scales its attraction by `1 / r`. Both modes use the same normalized
 inverse-rank objective. The estimator exposes these integer ranks as
-`graph_ranks_` and weights as `graph_weights_ = 1 / rank`.
+`graph_ranks_` and weights as `graph_weights_ = 1 / rank`. When labels are
+used, `optimization_edge_weights_` contains the normalized effective weights
+after label adjustment.
 
 ### Optimize coordinates
 
@@ -239,7 +261,8 @@ attraction, `log1p(d² + epsilon)`. Sampled non-edges use logistic repulsion,
 
 `lambda_rep` sets the repulsion share of the objective; attraction receives
 `1 - lambda_rep`. Positive and negative updates use the corresponding mean
-reductions; attraction uses `sum(1 / graph_ranks_)` as its normalizer. Each
+reductions; attraction uses the total effective edge weight as its normalizer.
+At `label_strength=0`, that is `sum(1 / graph_ranks_)`. Each
 positive edge contributes `negative_ratio`
 sampled non-neighbors from each eligible endpoint. The CPU Numba optimizer uses
 float32 coordinates, linear learning-rate decay, and recenters once per epoch.
@@ -394,7 +417,7 @@ library defaults; notebook recommendations can intentionally differ.
 | `n_components` | `2` | Embedding dimensions |
 | `pca_init` | `True` | Initialize `fit(X)` with PCA on feature-wise standardized inputs; extra PCA dimensions are zero-filled |
 | `pca_init_scaling` | `"global"` | Apply one uniform scale to fit all PCA coordinates into `[-1, 1]`, or use `"none"` to preserve raw magnitudes |
-| `multilevel_init` | `True` | Use rank-only graph coarsening and coarse-to-fine initialization |
+| `multilevel_init` | `True` | Use weighted graph coarsening and coarse-to-fine initialization |
 | `multilevel_reduction_ratio` | `32` | Approximate number of nodes represented by each node per coarsening level |
 | `multilevel_base_size` | `512` | Stop coarsening at or below this graph size |
 | `multilevel_epochs` | `1` | Refinement epochs at each coarsened graph level |
@@ -403,6 +426,7 @@ library defaults; notebook recommendations can intentionally differ.
 | `learning_rate` | `0.05` | Coordinate optimizer learning rate |
 | `negative_ratio` | `5` | Non-neighbors sampled per endpoint of each positive edge |
 | `lambda_rep` | `0.5` | Repulsion share, from 0 to 1 |
+| `label_strength` | `0.0` | Exponential same-class/different-class MST edge reweighting; positive values require `y` in `fit` |
 | `logistic_margin` | `1.0` | Squared-distance margin for repulsion |
 | `logistic_temperature` | `0.5` | Logistic repulsion softness; must be positive |
 | `epsilon` | `1e-4` | Smoothing for the logarithmic attraction |
@@ -469,13 +493,14 @@ ring with `gravity_pack_regions=True`. This rigid translation preserves
 within-region distances, but changes distances between regions; use it when a
 compact region view is more useful than preserving the fitted global layout.
 
-Set `multilevel_init=True` to initialize from the fitted ranked graph instead.
-The initializer scores graph edges by inverse rank, coarsens each connected
+Set `multilevel_init=True` to initialize from the fitted weighted graph instead.
+The initializer scores graph edges by inverse rank and, when supervised,
+label strength; it coarsens each connected
 component independently, then lays out the smallest graph from PCA of pooled
 group features when `pca_init=True` (the default). With `pca_init=False`, it
 uses seeded random coordinates instead. The layout then expands and refines
 the graph level by level. Coarse-level
-quotient edges use summed inverse-rank weights and run on the estimator's
+quotient edges use summed effective weights and run on the estimator's
 selected CPU or GPU optimizer. The final fit still uses the original graph and
 its normal rank scheduling. Explicit `init_coordinates` skip this process; if
 the graph cannot be reduced, the configured PCA or random initialization is
@@ -557,6 +582,6 @@ optimization by passing an `IteratedMinimumSpanningTreeEmbedder` as `embedder`.
 Python helper modules used by the notebooks are in [notebooks/src](notebooks/src/).
 For the full method description and equations, see the
 [IMSTE whitepaper](docs/whitepaper.md). For a detailed walkthrough of
-rank-only multilevel initialization, see the
+weighted multilevel initialization, see the
 [multilevel initialization guide](docs/multilevel-initialization.md).
 The package is distributed under the [MIT License](LICENSE).

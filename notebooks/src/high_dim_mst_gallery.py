@@ -221,6 +221,7 @@ def run_high_dim_mst_gallery(
     n_components: int = 2,
     n_msts: int = 15,
     n_epochs: int = 200,
+    label_strength: float = 0.0,
     batch_size: int = 131072,
     learning_rate: float = 0.05,
     mst_method: str = "famst",
@@ -326,6 +327,7 @@ def run_high_dim_mst_gallery(
                         mst_max_neighbors=mst_max_neighbors,
                         negative_ratio=negative_ratio,
                         lambda_rep=lambda_rep,
+                        label_strength=label_strength,
                         epsilon=epsilon,
                         logistic_margin=logistic_margin,
                         logistic_temperature=logistic_temperature,
@@ -350,7 +352,7 @@ def run_high_dim_mst_gallery(
             ]
         )
         started = time.perf_counter()
-        embedding = pipeline.fit_transform(X)
+        embedding = pipeline.fit_transform(X, imste__y=labels)
         elapsed = time.perf_counter() - started
         print(f"  pipeline completed in {elapsed:.2f} seconds", flush=True)
         estimator = pipeline.named_steps["imste"]

@@ -115,7 +115,6 @@ class InductiveIMSTE(TransformerMixin, BaseEstimator):
 
     def fit(self, X: object, y: object = None) -> "InductiveIMSTE":
         """Fit the reference embedding and its MLP projection."""
-        del y
         fit_started = time.perf_counter()
         n_layers = _positive_integer("n_layers", self.n_layers)
         layer_size = _positive_integer("layer_size", self.layer_size)
@@ -140,7 +139,7 @@ class InductiveIMSTE(TransformerMixin, BaseEstimator):
             raise ValueError(
                 "embedder must be an IteratedMinimumSpanningTreeEmbedder or None."
             )
-        self.embedder_.fit(X)
+        self.embedder_.fit(X, y=y)
         self.reference_embedding_ = self.embedder_.embedding_.copy()
         self.n_features_in_ = self.embedder_.n_features_in_
         if hasattr(self.embedder_, "feature_names_in_"):

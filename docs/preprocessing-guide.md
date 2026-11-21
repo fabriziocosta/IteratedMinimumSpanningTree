@@ -69,8 +69,9 @@ embedding = mapper.fit_transform(texts)
 ```
 
 Sparse transformer output is accepted. When `y` is supplied to `fit`, it is
-passed to the preprocessor; IMSTE itself remains unsupervised and does not use
-labels to construct the embedding.
+passed to the preprocessor; IMSTE uses labels to reweight graph-edge attraction
+only when `label_strength` is positive. Otherwise labels are not used to
+construct the embedding.
 
 ## Fit and transform behavior
 

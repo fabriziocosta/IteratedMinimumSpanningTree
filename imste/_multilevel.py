@@ -161,14 +161,20 @@ def build_multilevel_hierarchy(
     edges: np.ndarray,
     ranks: np.ndarray,
     *,
+    base_weights: np.ndarray | None = None,
     reduction_ratio: int = 4,
     base_size: int = 1024,
     progress_callback=None,
 ) -> list[tuple[np.ndarray, np.ndarray, np.ndarray]]:
     """Build successive levels, each mapping previous nodes to its quotient."""
-    current_edges, current_weights = _canonical_edges(
-        edges, 1.0 / np.asarray(ranks, dtype=np.float64)
+    initial_weights = (
+        1.0 / np.asarray(ranks, dtype=np.float64)
+        if base_weights is None
+        else np.asarray(base_weights, dtype=np.float64)
     )
+    if initial_weights.shape != (len(edges),):
+        raise ValueError("base_weights must contain one value per edge.")
+    current_edges, current_weights = _canonical_edges(edges, initial_weights)
     current_nodes = n_nodes
     levels = []
     while current_nodes > base_size:

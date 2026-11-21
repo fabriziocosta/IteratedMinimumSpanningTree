@@ -217,11 +217,12 @@ def format_duration(seconds: float) -> str:
 
 def _fit_and_score(X, labels, parameter, value, base_params, n_neighbors):
     params = dict(base_params)
+    params.setdefault("label_strength", 0.0)
     params[parameter] = value
     estimator = IteratedMinimumSpanningTreeEmbedder(**params)
     started = time.perf_counter()
     print(f"Fitting {parameter}={value} ...", flush=True)
-    embedding = estimator.fit_transform(X)
+    embedding = estimator.fit_transform(X, y=labels)
     elapsed = time.perf_counter() - started
     print(
         f"Finished {parameter}={value} in {format_duration(elapsed)} "

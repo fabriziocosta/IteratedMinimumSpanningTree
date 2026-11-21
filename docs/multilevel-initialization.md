@@ -1,12 +1,12 @@
-# Rank-only multilevel initialization for IMSTE
+# Weighted multilevel initialization for IMSTE
 
 ## What it does
 
-Multilevel initialization builds a starting layout by working from a small graph up to the full IMSTE graph. It uses the fitted graph's vertices, edges, and ranks. It does not use the input feature distances again during coarsening.
+Multilevel initialization builds a starting layout by working from a small graph up to the full IMSTE graph. It uses the fitted graph's vertices, edges, and effective weights, including any label adjustment. It does not use the input feature distances again during coarsening.
 
-The feature is optional. With the default `multilevel_init=True`, the estimator builds a starting layout through rank-only coarsening. If you provide `init_coordinates`, those coordinates always take precedence and multilevel initialization is skipped.
+The feature is optional. With the default `multilevel_init=True`, the estimator builds a starting layout through weighted coarsening. If you provide `init_coordinates`, those coordinates always take precedence and multilevel initialization is skipped.
 
-When multilevel initialization is enabled, `pca_init=True` (the default) initializes the coarsest graph by running PCA on the mean feature vector for each coarsest group. This use of features affects starting coordinates only: graph coarsening still depends on edge ranks, not feature distances. Set `pca_init=False` to use a seeded random start on the coarsest graph.
+When multilevel initialization is enabled, `pca_init=True` (the default) initializes the coarsest graph by running PCA on the mean feature vector for each coarsest group. This use of features affects starting coordinates only: graph coarsening depends on edge ranks and, when enabled, label adjusted weights, not feature distances. Set `pca_init=False` to use a seeded random start on the coarsest graph.
 
 The process has two phases:
 
@@ -58,13 +58,13 @@ The final optimization still uses the estimator's usual `n_epochs`, original ran
 
 ## Step 1: Give each graph edge a score
 
-For an edge with rank $r_e$, the score is its inverse rank:
+For an edge with rank $r_e$, the default score is its inverse rank:
 
 $$
 a_e = \frac{1}{r_e}
 $$
 
-A rank-one edge therefore has score $1$, a rank-two edge has score $1/2$, and so on. These scores guide the grouping and the coarse layouts. Original feature distances are not consulted during these steps.
+A rank-one edge therefore has score $1$, a rank-two edge has score $1/2$, and so on. When `label_strength` is positive, this score also includes the same or different-class multiplier used by the final attraction objective; edges touching unknown labels retain their inverse-rank score. These scores guide the grouping and coarse layouts. Original feature distances are not consulted during these steps.
 
 ## Step 2: Decide how many groups to make
 
@@ -148,15 +148,15 @@ flowchart LR
 
 ## Step 7: Lay out the smallest graph
 
-By default, the smallest graph starts from PCA of its pooled group features. To build these features, the estimator averages the original feature rows in each coarsest group, then applies the same feature-standardization and PCA initialization used by the regular estimator. If there are no features available, or `pca_init=False`, it starts from seeded random coordinates instead. Feature values affect only this initial layout; they do not affect which vertices were grouped or how quotient edges were weighted.
+By default, the smallest graph starts from PCA of its pooled group features. To build these features, the estimator averages the original feature rows in each coarsest group, then applies the same feature-standardization and PCA initialization used by the regular estimator. If there are no features available, or `pca_init=False`, it starts from seeded random coordinates instead. Feature values affect only this initial layout; they do not affect which vertices were grouped or how quotient edges were weighted. When `label_strength` is positive, labels affect grouping and quotient weights through the adjusted edge weights.
 
-The smallest graph's weighted quotient edges are optimized for `multilevel_epochs`. At each coarse level, the CPU or MPS optimizer selected by the estimator uses the direct quotient edge weights, normalized by their total weight.
+The smallest graph's weighted quotient edges are optimized for `multilevel_epochs`. At each coarse level, the CPU or GPU optimizer selected by the estimator uses the direct quotient edge weights, normalized by their total weight.
 
 If the smallest graph has no edges, there is nothing to optimize at that level; the coordinate expansion steps still proceed.
 
 ## Step 8: Expand coordinates to the next finer graph
 
-The algorithm moves from a coarse graph back to the graph level that produced it. Each fine vertex already knows the group it belongs to. For that vertex, the algorithm looks across its edges to neighbouring groups and takes a weighted average of those groups' coordinates. Let $w_e$ be the edge's weight at the current level: inverse rank on the original graph, or the summed quotient weight on a coarser graph.
+The algorithm moves from a coarse graph back to the graph level that produced it. Each fine vertex already knows the group it belongs to. For that vertex, the algorithm looks across its edges to neighbouring groups and takes a weighted average of those groups' coordinates. Let $w_e$ be the edge's weight at the current level: effective weight on the original graph, or the summed quotient weight on a coarser graph.
 
 $$
 \bar y_i = \frac{\sum_{e=(i,j),\,g(j)\ne g(i)} w_e\,y_{g(j)}}{\sum_{e=(i,j),\,g(j)\ne g(i)} w_e}

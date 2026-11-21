@@ -159,11 +159,12 @@ def optimize_embedding_torch(
         )
     use_edge_weights = edge_weights is not None
     phases = rank_phases(ranks, random_state)
-    expected_active_edges = (
-        float(np.sum(direct_weights))
-        if use_edge_weights
-        else expected_active_edge_count(ranks)
-    )
+    if use_edge_weights and schedule_by_rank:
+        expected_active_edges = float(np.sum(direct_weights / ranks))
+    elif use_edge_weights:
+        expected_active_edges = float(np.sum(direct_weights))
+    else:
+        expected_active_edges = expected_active_edge_count(ranks)
     max_rank = int(np.max(ranks)) if ranks.size else 0
     rank_counts = np.bincount(ranks, minlength=max_rank + 1)
     rank_offsets = np.cumsum(rank_counts, dtype=np.int64)

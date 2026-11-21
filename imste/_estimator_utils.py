@@ -34,6 +34,61 @@ def _finite_nonnegative(
         raise ValueError(f"{name} must be a finite {qualifier} number.")
     return result
 
+
+def _label_edge_multipliers(
+    labels: object | None,
+    edges: np.ndarray,
+    strength: float,
+    n_samples: int,
+) -> np.ndarray:
+    """Return stable same/different-class multipliers for graph edges."""
+    multipliers = np.ones(len(edges), dtype=np.float64)
+    if strength == 0.0:
+        return multipliers
+    if labels is None:
+        raise ValueError("y is required when label_strength is greater than zero.")
+    values = np.asarray(labels, dtype=object)
+    if values.ndim != 1 or values.shape[0] != n_samples:
+        raise ValueError("y must be one-dimensional with one label per sample.")
+
+    def is_missing(value: object) -> bool:
+        if value is None:
+            return True
+        if isinstance(value, (float, np.floating)):
+            return bool(np.isnan(value))
+        return False
+
+    missing = np.fromiter((is_missing(value) for value in values), bool, len(values))
+    if np.all(missing):
+        raise ValueError("y must contain at least one known label.")
+
+    log_multipliers = np.zeros(len(edges), dtype=np.float64)
+    if not len(edges):
+        return multipliers
+    for index, (left, right) in enumerate(edges):
+        if missing[left] or missing[right]:
+            continue
+        try:
+            same_class = bool(values[left] == values[right])
+        except (TypeError, ValueError) as error:
+            raise ValueError("y must contain scalar categorical labels.") from error
+        log_multipliers[index] = strength / 2.0 if same_class else -strength / 2.0
+
+    # A common scale cancels in the normalized attraction objective. Shifting
+    # the largest log multiplier to zero avoids overflow for large strengths.
+    log_multipliers -= np.max(log_multipliers)
+    lower_bound = np.log(np.finfo(np.float32).tiny)
+    return np.exp(np.maximum(log_multipliers, lower_bound))
+
+
+def _normalized_edge_weights(ranks: np.ndarray, multipliers: np.ndarray) -> np.ndarray:
+    """Combine inverse ranks with label multipliers and normalize to unit sum."""
+    weights = np.asarray(multipliers, dtype=np.float64) / np.asarray(ranks)
+    total = float(np.sum(weights))
+    if total > 0.0:
+        weights /= total
+    return weights
+
 def _standardized_pca_initialization(
     X: np.ndarray | csr_matrix,
     n_components: int,

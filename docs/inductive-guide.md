@@ -13,6 +13,9 @@ python -m pip install "imste[gpu]"
 
 ## Fit and project
 
+The supervised example below assumes `X_train` and the matching categorical
+labels `y_train` are already prepared.
+
 ```python
 from imste import IteratedMinimumSpanningTreeEmbedder
 from imste.inductive import InductiveIMSTE
@@ -20,6 +23,7 @@ from imste.inductive import InductiveIMSTE
 model = InductiveIMSTE(
     embedder=IteratedMinimumSpanningTreeEmbedder(
         n_msts=10,
+        label_strength=0.6,
         random_state=42,
     ),
     n_layers=6,
@@ -27,7 +31,7 @@ model = InductiveIMSTE(
     dropout=0.1,
     min_epochs=100,
     patience=20,
-).fit(X_train)
+).fit(X_train, y=y_train)
 
 Z_new = model.transform(X_new)
 Z_reference = model.reference_embedding_
@@ -39,6 +43,8 @@ coordinates. `reference_embedding_` stores the IMSTE coordinates;
 `transform()` always returns MLP predictions, including for training rows.
 Predictions can differ from the reference coordinates, and adding new rows does
 not extend or re-optimize the fitted graph.
+When the configured embedder has positive `label_strength`, pass `y_train` to
+`fit` so its reference embedding uses the supervised edge weights.
 
 ## Training behavior and settings
 

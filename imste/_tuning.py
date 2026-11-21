@@ -208,12 +208,20 @@ def tune_estimator(
     if search_space is None:
         search_space = _DEFAULT_SEARCH_SPACE
     search_space = dict(search_space)
+    supervised_tuning = float(estimator.label_strength) > 0.0
+    if "label_strength" in search_space:
+        strength_values = search_space["label_strength"]
+        if isinstance(strength_values, tuple):
+            supervised_tuning |= float(strength_values[1]) > 0.0
+        elif isinstance(strength_values, list):
+            supervised_tuning |= any(float(value) > 0.0 for value in strength_values)
     names, dimensions = _search_dimensions(
         estimator, search_space, Integer, Real, Categorical
     )
     cv = StratifiedKFold(
         n_splits=5, shuffle=True, random_state=estimator.random_state
     )
+    folds = list(cv.split(X_checked, y_checked))
     cv_scores: list[float] = []
     coverage_scores: list[float] = []
     objective_scores: list[float] = []
@@ -229,17 +237,47 @@ def tune_estimator(
         candidate = clone(estimator)
         candidate.set_params(n_components=2, **parameters)
         candidate.verbose = bool(verbose)
-        embedding = candidate.fit_transform(X_checked)
-        accuracy = float(
-            cross_val_score(
-                KNeighborsClassifier(n_neighbors=int(k)),
-                embedding,
-                y_checked,
-                cv=cv,
-                scoring="accuracy",
-            ).mean()
-        )
-        coverage = spatial_coverage_score(embedding)
+        if supervised_tuning:
+            fold_accuracies = []
+            fold_coverages = []
+            embedding = None
+            for training_indices, validation_indices in folds:
+                fold_labels = np.full(len(y_checked), None, dtype=object)
+                fold_labels[training_indices] = y_checked[training_indices]
+                fold_estimator = clone(candidate)
+                fold_embedding = fold_estimator.fit_transform(
+                    X_checked,
+                    y=fold_labels if fold_estimator.label_strength > 0.0 else None,
+                )
+                if embedding is None:
+                    embedding = fold_embedding
+                classifier = KNeighborsClassifier(n_neighbors=int(k))
+                classifier.fit(
+                    fold_embedding[training_indices], y_checked[training_indices]
+                )
+                fold_accuracies.append(
+                    float(
+                        np.mean(
+                            classifier.predict(fold_embedding[validation_indices])
+                            == y_checked[validation_indices]
+                        )
+                    )
+                )
+                fold_coverages.append(spatial_coverage_score(fold_embedding))
+            accuracy = float(np.mean(fold_accuracies))
+            coverage = float(np.mean(fold_coverages))
+        else:
+            embedding = candidate.fit_transform(X_checked)
+            accuracy = float(
+                cross_val_score(
+                    KNeighborsClassifier(n_neighbors=int(k)),
+                    embedding,
+                    y_checked,
+                    cv=cv,
+                    scoring="accuracy",
+                ).mean()
+            )
+            coverage = spatial_coverage_score(embedding)
         objective_score = (
             (1.0 - float(coverage_weight)) * accuracy
             + float(coverage_weight) * coverage
@@ -301,7 +339,10 @@ def tune_estimator(
     original_verbose = estimator.verbose
     try:
         estimator.verbose = bool(verbose)
-        estimator.fit(X_checked)
+        estimator.fit(
+            X_checked,
+            y=y_checked if estimator.label_strength > 0.0 else None,
+        )
     finally:
         estimator.verbose = original_verbose
 

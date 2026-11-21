@@ -14,6 +14,8 @@ from ._estimator_graph import _EstimatorGraphMethods
 from ._estimator_utils import (
     _append_candidate_attraction_edges,
     _finite_nonnegative,
+    _label_edge_multipliers,
+    _normalized_edge_weights,
     _positive_integer,
     _sample_negative_targets,
     _sample_sparse_negative_targets,
@@ -67,7 +69,7 @@ class IteratedMinimumSpanningTreeEmbedder(
         Explicit starting coordinates for optimization. These take precedence
         over PCA and random initialization and must follow the input row order.
     multilevel_init : bool, default=True
-        Initialize from a rank-only multilevel coarsening of the fitted graph.
+        Initialize from a weighted multilevel coarsening of the fitted graph.
         Explicit ``init_coordinates`` take precedence. If coarsening makes no
         progress, the configured PCA or seeded random initialization is used.
         When ``pca_init=True`` and features are available, initialize the
@@ -89,6 +91,10 @@ class IteratedMinimumSpanningTreeEmbedder(
         Number of sampled non-neighbors per endpoint of each positive edge.
     lambda_rep : float, default=0.5
         Repulsion share in the objective, from zero to one.
+    label_strength : float, default=0.0
+        Optional supervised edge reweighting strength. Same-class edges are
+        multiplied by ``exp(label_strength / 2)`` and different-class edges
+        by ``exp(-label_strength / 2)``. Zero preserves unsupervised fitting.
     logistic_margin : float, default=1.0
         Squared-distance margin used by logistic repulsion.
     logistic_temperature : float, default=0.5
@@ -231,6 +237,7 @@ class IteratedMinimumSpanningTreeEmbedder(
         mean_shift_step_size: float = 0.5,
         mean_shift_iterations: int = 1,
         input_preprocessor: object | str | None = None,
+        label_strength: float = 0.0,
     ) -> None:
         self.n_msts = n_msts
         self.n_components = n_components
@@ -239,6 +246,7 @@ class IteratedMinimumSpanningTreeEmbedder(
         self.learning_rate = learning_rate
         self.negative_ratio = negative_ratio
         self.lambda_rep = lambda_rep
+        self.label_strength = label_strength
         self.random_state = random_state
         self.pca_init = pca_init
         self.epsilon = epsilon
@@ -400,6 +408,7 @@ class IteratedMinimumSpanningTreeEmbedder(
         lambda_rep = _finite_nonnegative("lambda_rep", self.lambda_rep)
         if lambda_rep > 1.0:
             raise ValueError("lambda_rep must be between 0 and 1 inclusive.")
+        label_strength = _finite_nonnegative("label_strength", self.label_strength)
         epsilon = _finite_nonnegative("epsilon", self.epsilon, strictly_positive=True)
         logistic_margin = _finite_nonnegative("logistic_margin", self.logistic_margin)
         logistic_temperature = _finite_nonnegative(
@@ -463,6 +472,7 @@ class IteratedMinimumSpanningTreeEmbedder(
             "include_knn_attraction": bool(self.include_knn_attraction),
             "learning_rate": learning_rate,
             "lambda_rep": lambda_rep,
+            "label_strength": label_strength,
             "epsilon": epsilon,
             "logistic_margin": logistic_margin,
             "logistic_temperature": logistic_temperature,
@@ -529,6 +539,7 @@ class IteratedMinimumSpanningTreeEmbedder(
         schedule_by_rank: bool,
         X_checked: object | None = None,
         X_original: object | None = None,
+        labels: object | None = None,
         initialization_features: object | None = None,
         initial_coordinates: object | None = None,
         **options,
@@ -540,6 +551,18 @@ class IteratedMinimumSpanningTreeEmbedder(
         ``initial_coordinates`` directly supplies the optimizer's starting
         coordinates when present.
         """
+        label_multipliers = _label_edge_multipliers(
+            labels,
+            edges,
+            options["label_strength"],
+            n_samples,
+        )
+        effective_edge_weights = (
+            1.0 / np.asarray(tree_ranks, dtype=np.float64) * label_multipliers
+        )
+        self.optimization_edge_weights_ = _normalized_edge_weights(
+            tree_ranks, label_multipliers
+        )
         embedding_started = time.perf_counter()
         self.multilevel_initialization_time_ = 0.0
         rng = np.random.RandomState(self.random_state)
@@ -567,6 +590,7 @@ class IteratedMinimumSpanningTreeEmbedder(
                 resolved_device,
                 pca_features,
                 options,
+                base_weights=effective_edge_weights,
             )
             self.multilevel_initialization_time_ = (
                 time.perf_counter() - multilevel_started
@@ -625,6 +649,12 @@ class IteratedMinimumSpanningTreeEmbedder(
             progress_callback=self._active_progress_callback,
             timing_callback=record_optimizer_timing,
         )
+        if options["label_strength"] > 0.0:
+            optimizer_kwargs["edge_weights"] = (
+                label_multipliers
+                if schedule_by_rank
+                else effective_edge_weights
+            )
         if optimizer_batch_size is not None:
             optimizer_kwargs["batch_size"] = optimizer_batch_size
         if self._active_mst_progress_callback is not None:
@@ -702,11 +732,14 @@ class IteratedMinimumSpanningTreeEmbedder(
         resolved_device,
         pca_features,
         options,
+        *,
+        base_weights: np.ndarray,
     ):
         levels = build_multilevel_hierarchy(
             n_samples,
             edges,
             ranks,
+            base_weights=base_weights,
             reduction_ratio=options["multilevel_reduction_ratio"],
             base_size=options["multilevel_base_size"],
             progress_callback=self._active_mst_progress_callback,
@@ -719,7 +752,7 @@ class IteratedMinimumSpanningTreeEmbedder(
             )
 
         quotient_edges = np.asarray(edges, dtype=np.int64)
-        quotient_weights = 1.0 / np.asarray(ranks, dtype=np.float64)
+        quotient_weights = np.asarray(base_weights, dtype=np.float64).copy()
         n_nodes = n_samples
         for labels, _, _ in levels:
             n_nodes = int(labels.max()) + 1
@@ -921,6 +954,10 @@ class IteratedMinimumSpanningTreeEmbedder(
     def fit(self, X: object, y: object = None) -> "IteratedMinimumSpanningTreeEmbedder":
         """Fit the embedding and store coordinates for the input rows.
 
+        When ``label_strength`` is positive, ``y`` must contain one
+        categorical label per row. ``None`` and NaN entries are treated as
+        unknown; labels adjust the attraction weights on existing graph edges.
+
         Dense and CSR feature matrices are accepted. By default, standardized
         PCA scores are uniformly scaled by their global maximum absolute value
         so every coordinate fits in ``[-1, 1]``. Set
@@ -955,7 +992,6 @@ class IteratedMinimumSpanningTreeEmbedder(
                 configured = make_preprocessor(configured)
             self.preprocessor_ = clone(configured)
             X = fit_transform_input(self.preprocessor_, X, y)
-        del y  # Labels are available to an optional supervised preprocessor only.
         options = self._validated_fit_options()
         for name in ("feature_neighbor_graph_", "feature_neighbor_graph_reused_"):
             if hasattr(self, name):
@@ -1059,6 +1095,7 @@ class IteratedMinimumSpanningTreeEmbedder(
             schedule_by_rank=self.mst_method != "prim",
             X_checked=X_checked,
             X_original=X,
+            labels=y,
             initialization_features=metric_features,
             initial_coordinates=self.init_coordinates,
             **{

@@ -193,3 +193,37 @@ def test_tune_defaults_to_standard_space_and_budget(monkeypatch):
         "gravity_strength": (0.0, 1.0),
         "mean_shift_iterations": (0, 5),
     }
+
+
+def test_supervised_tune_masks_each_validation_fold_labels(monkeypatch):
+    _fake_skopt(monkeypatch)
+    fit_labels = []
+    refit_labels = []
+
+    def fake_fit_transform(self, X, y=None):
+        fit_labels.append(np.asarray(y, dtype=object).copy())
+        embedding = np.asarray(X, dtype=float)[:, :2].copy()
+        self.embedding_ = embedding
+        return embedding
+
+    def fake_fit(self, X, y=None):
+        refit_labels.append(np.asarray(y).copy())
+        self.embedding_ = np.asarray(X, dtype=float)[:, :2].copy()
+        return self
+
+    monkeypatch.setattr(
+        IteratedMinimumSpanningTreeEmbedder, "fit_transform", fake_fit_transform
+    )
+    monkeypatch.setattr(IteratedMinimumSpanningTreeEmbedder, "fit", fake_fit)
+    X = np.array([[i, j] for i in range(5) for j in (0, 1)], dtype=float)
+    y = np.array(["left"] * 5 + ["right"] * 5)
+
+    result = IteratedMinimumSpanningTreeEmbedder(
+        random_state=5, label_strength=0.4
+    ).tune(X, y, search_space={"n_msts": [1]}, n_samples=1, n_initial_points=1)
+
+    assert len(fit_labels) == 5
+    assert all(sum(label is None for label in labels) == 2 for labels in fit_labels)
+    assert len(refit_labels) == 1
+    np.testing.assert_array_equal(refit_labels[0], y)
+    assert result.best_embedding.shape == (len(X), 2)

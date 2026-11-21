@@ -19,8 +19,9 @@ scikit-learn's built-in digits dataset and does not download data:
    ).fit_transform(X)
    print(embedding.shape)  # (1797, 2)
 
-The coordinates are unsupervised; the digit labels are available separately
-for coloring or evaluation. Start with the :doc:`getting-started` guide for a
+With the default ``label_strength=0``, the coordinates are unsupervised; digit
+labels are available separately for coloring or evaluation. Start with the
+:doc:`getting-started` guide for a
 plotting example and notes on scaling and graph construction.
 
 Choose a path
