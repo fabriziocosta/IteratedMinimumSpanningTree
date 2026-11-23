@@ -64,7 +64,7 @@ $$
 a_e = \frac{1}{r_e}
 $$
 
-A rank-one edge therefore has score $1$, a rank-two edge has score $1/2$, and so on. When `label_strength` is positive, this score also includes the same or different-class multiplier used by the final attraction objective; edges touching unknown labels retain their inverse-rank score. These scores guide the grouping and coarse layouts. Original feature distances are not consulted during these steps.
+A rank-one edge therefore has score $1$, a rank-two edge has score $1/2$, and so on. When `label_strength` is positive, this score also includes the same or different-class multiplier used by the final attraction objective. When `target_strength` is positive, it includes the numeric-target similarity multiplier. Edges touching unknown labels or targets retain their inverse-rank score. These scores guide the grouping and coarse layouts. Original feature distances are not consulted during these steps.
 
 ## Step 2: Decide how many groups to make
 
@@ -148,7 +148,7 @@ flowchart LR
 
 ## Step 7: Lay out the smallest graph
 
-By default, the smallest graph starts from PCA of its pooled group features. To build these features, the estimator averages the original feature rows in each coarsest group, then applies the same feature-standardization and PCA initialization used by the regular estimator. If there are no features available, or `pca_init=False`, it starts from seeded random coordinates instead. Feature values affect only this initial layout; they do not affect which vertices were grouped or how quotient edges were weighted. When `label_strength` is positive, labels affect grouping and quotient weights through the adjusted edge weights.
+By default, the smallest graph starts from PCA of its pooled group features. To build these features, the estimator averages the original feature rows in each coarsest group, then applies the same feature-standardization and PCA initialization used by the regular estimator. If there are no features available, or `pca_init=False`, it starts from seeded random coordinates instead. Feature values affect only this initial layout; they do not affect which vertices were grouped or how quotient edges were weighted. Positive `label_strength` or `target_strength` changes grouping and quotient weights through the adjusted graph-edge weights.
 
 The smallest graph's weighted quotient edges are optimized for `multilevel_epochs`. At each coarse level, the CPU or GPU optimizer selected by the estimator uses the direct quotient edge weights, normalized by their total weight.
 

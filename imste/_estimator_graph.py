@@ -33,8 +33,9 @@ class _EstimatorGraphMethods:
         short edges when necessary and increase their ranks, which reduces
         their attraction weights.
 
-        When ``label_strength`` is positive, ``y`` supplies one categorical
-        label per graph node; ``None`` and NaN labels are treated as unknown.
+        When ``label_strength`` is positive, ``y`` supplies categorical labels;
+        when ``target_strength`` is positive, it supplies numeric targets.
+        ``None`` and NaN entries are treated as unknown in either mode.
         ``init_features`` optionally supplies the sample-by-feature matrix used
         for standardized PCA initialization. ``init_coordinates`` can instead
         supply a complete initial embedding with one row per graph node and one
@@ -210,8 +211,9 @@ class _EstimatorGraphMethods:
 
         If ``X`` is supplied, fit IMSTE to ``X`` first and use that embedding
         to initialize optimization over ``distance_graph``. The graph remains
-        the objective for the final fit. When ``label_strength`` is positive,
-        ``y`` adjusts attraction weights in both fits. ``init_features``
+        the objective for the final fit. ``y`` adjusts attraction weights in
+        both fits when categorical or target supervision is enabled.
+        ``init_features``
         retains the direct standardized-PCA initialization behavior of
         :meth:`fit_graph` and cannot be combined with ``X``.
         """

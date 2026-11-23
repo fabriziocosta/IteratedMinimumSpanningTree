@@ -22,6 +22,7 @@ from ._estimator_utils import (
     _sample_sparse_negative_targets,
     _scale_initialization_coordinates,
     _standardized_pca_initialization,
+    _target_edge_multipliers,
 )
 from ._optimizer import optimize_embedding
 from ._multilevel import (
@@ -99,6 +100,14 @@ class IteratedMinimumSpanningTreeEmbedder(
         Optional supervised edge reweighting strength. Same-class edges are
         multiplied by ``exp(label_strength / 2)`` and different-class edges
         by ``exp(-label_strength / 2)``. Zero preserves unsupervised fitting.
+    target_strength : float, default=0.0
+        Continuous-target edge reweighting strength. Similar target values
+        strengthen attraction between feature-neighbor edges, while dissimilar
+        values weaken it. Mutually exclusive with positive ``label_strength``.
+    target_bandwidth : float, default=1.0
+        Positive bandwidth for continuous-target similarity, measured in
+        robust target-scale units. Smaller values focus attraction on closer
+        target values.
     logistic_margin : float, default=1.0
         Squared-distance margin used by logistic repulsion.
     logistic_temperature : float, default=0.5
@@ -242,6 +251,8 @@ class IteratedMinimumSpanningTreeEmbedder(
         mean_shift_iterations: int = 1,
         input_preprocessor: object | str | None = None,
         label_strength: float = 0.0,
+        target_strength: float = 0.0,
+        target_bandwidth: float = 1.0,
     ) -> None:
         self.n_msts = n_msts
         self.n_components = n_components
@@ -251,6 +262,8 @@ class IteratedMinimumSpanningTreeEmbedder(
         self.negative_ratio = negative_ratio
         self.lambda_rep = lambda_rep
         self.label_strength = label_strength
+        self.target_strength = target_strength
+        self.target_bandwidth = target_bandwidth
         self.random_state = random_state
         self.pca_init = pca_init
         self.epsilon = epsilon
@@ -413,6 +426,15 @@ class IteratedMinimumSpanningTreeEmbedder(
         if lambda_rep > 1.0:
             raise ValueError("lambda_rep must be between 0 and 1 inclusive.")
         label_strength = _finite_nonnegative("label_strength", self.label_strength)
+        target_strength = _finite_nonnegative("target_strength", self.target_strength)
+        target_bandwidth = _finite_nonnegative(
+            "target_bandwidth", self.target_bandwidth, strictly_positive=True
+        )
+        if label_strength > 0.0 and target_strength > 0.0:
+            raise ValueError(
+                "label_strength and target_strength are mutually exclusive; "
+                "choose categorical or continuous-target supervision."
+            )
         epsilon = _finite_nonnegative("epsilon", self.epsilon, strictly_positive=True)
         logistic_margin = _finite_nonnegative("logistic_margin", self.logistic_margin)
         logistic_temperature = _finite_nonnegative(
@@ -477,6 +499,8 @@ class IteratedMinimumSpanningTreeEmbedder(
             "learning_rate": learning_rate,
             "lambda_rep": lambda_rep,
             "label_strength": label_strength,
+            "target_strength": target_strength,
+            "target_bandwidth": target_bandwidth,
             "epsilon": epsilon,
             "logistic_margin": logistic_margin,
             "logistic_temperature": logistic_temperature,
@@ -555,12 +579,21 @@ class IteratedMinimumSpanningTreeEmbedder(
         ``initial_coordinates`` directly supplies the optimizer's starting
         coordinates when present.
         """
-        label_multipliers = _label_edge_multipliers(
-            labels,
-            edges,
-            options["label_strength"],
-            n_samples,
-        )
+        if options["target_strength"] > 0.0:
+            label_multipliers = _target_edge_multipliers(
+                labels,
+                edges,
+                options["target_strength"],
+                options["target_bandwidth"],
+                n_samples,
+            )
+        else:
+            label_multipliers = _label_edge_multipliers(
+                labels,
+                edges,
+                options["label_strength"],
+                n_samples,
+            )
         effective_edge_weights = (
             1.0 / np.asarray(tree_ranks, dtype=np.float64) * label_multipliers
         )
@@ -653,7 +686,7 @@ class IteratedMinimumSpanningTreeEmbedder(
             progress_callback=self._active_progress_callback,
             timing_callback=record_optimizer_timing,
         )
-        if options["label_strength"] > 0.0:
+        if options["label_strength"] > 0.0 or options["target_strength"] > 0.0:
             optimizer_kwargs["edge_weights"] = (
                 label_multipliers
                 if schedule_by_rank
@@ -958,9 +991,10 @@ class IteratedMinimumSpanningTreeEmbedder(
     def fit(self, X: object, y: object = None) -> "IteratedMinimumSpanningTreeEmbedder":
         """Fit the embedding and store coordinates for the input rows.
 
-        When ``label_strength`` is positive, ``y`` must contain one
-        categorical label per row. ``None`` and NaN entries are treated as
-        unknown; labels adjust the attraction weights on existing graph edges.
+        When ``label_strength`` is positive, ``y`` must contain one categorical
+        label per row. When ``target_strength`` is positive, ``y`` must contain
+        one numeric target per row. In either mode, ``None`` and NaN entries
+        are treated as unknown and do not alter incident edge weights.
 
         Dense and CSR feature matrices are accepted. By default, standardized
         PCA scores are uniformly scaled by their global maximum absolute value
@@ -1247,15 +1281,20 @@ class IteratedMinimumSpanningTreeEmbedder(
         n_samples: int = 40,
         n_initial_points: int = 20,
         coverage_weight: float = 0.4,
-        scoring: str | Callable = "accuracy",
+        scoring: str | Callable | None = None,
         trial_callback: Callable[[dict[str, object]], None] | None = None,
         verbose: bool = False,
+        task: str = "classification",
     ):
-        """Tune settings for a classification scorer and spatial coverage.
+        """Tune settings for classification or continuous-target regression.
 
-        Each search trial fits IMSTE once on all rows in ``X``; labels are
-        used only to score that transductive embedding with shuffled,
-        stratified five-fold cross-validation. Numeric ``(low, high)`` tuples
+        For classification, each unsupervised search trial fits IMSTE once on
+        all rows in ``X``; labels are used only to score the transductive
+        embedding with shuffled, stratified five-fold cross-validation.
+        Supervised classification uses one fit per fold with held-out labels
+        masked. Regression uses shuffled five-fold validation and fits one
+        embedding per fold when positive target supervision is active. Numeric
+        ``(low, high)`` tuples
         define inclusive bounds, with integer or continuous dimensions inferred
         from the estimator parameter's declared default type. Parameters with
         a ``None`` default use their current value or the tuple endpoint types.
@@ -1270,7 +1309,8 @@ class IteratedMinimumSpanningTreeEmbedder(
         optimization.
 
         Trials maximize ``(1 - coverage_weight) * score +
-        coverage_weight * spatial_coverage``. ``scoring`` accepts a
+        coverage_weight * spatial_coverage``. For ``task='classification'``,
+        ``scoring`` accepts a
         scikit-learn scorer name or scorer callable, plus the shortcuts
         ``"accuracy"``, ``"roc"`` (macro one-vs-rest ROC AUC), ``"apr"``
         (average precision), and ``"f-score"`` (macro F1). Spatial coverage
@@ -1278,12 +1318,23 @@ class IteratedMinimumSpanningTreeEmbedder(
         entropy score.
         The default ``coverage_weight=0.4`` gives the selected scorer 60% of the
         objective; set it to zero to tune the scorer alone. Accuracy is also
-        recorded separately for every trial.
+        recorded separately for every classification trial.
+
+        For ``task='regression'``, ``y`` must be one finite, non-constant
+        numeric target and ``scoring`` is ``None`` or ``"r2"``. Layout fits
+        use continuous target-aware edge attraction when ``target_strength``
+        is positive. Shuffled five-fold KFold scores a k-NN regressor using
+        each embedding. Validation targets are masked during every supervised
+        fold fit. R² is mapped smoothly to [0, 1] before it is combined with
+        spatial coverage; raw R², MAE, RMSE, and Spearman correlation are
+        retained as diagnostics. By default, regression tuning searches
+        ``target_strength`` over (0, 4) and ``target_bandwidth`` over
+        (0.25, 2) in robust target-scale units.
 
         ``trial_callback``, when supplied, is called after each completed trial
-        with its accuracy, coverage and objective scores, the best-so-far
-        metrics and parameters, and a copy of that trial's embedding. This is
-        useful for displaying live progress in a notebook.
+        with task-specific metrics, coverage and objective scores, the
+        best-so-far metrics and parameters, and a copy of that trial's
+        embedding. This is useful for displaying live progress in a notebook.
 
         ``verbose`` controls progress output from the optimizer and trial/final
         estimator fits. It defaults to ``False``; ``trial_callback`` remains
@@ -1292,15 +1343,15 @@ class IteratedMinimumSpanningTreeEmbedder(
         The best configuration is then fitted on all rows and stored on this
         estimator. The returned scikit-optimize ``OptimizeResult`` contains the
         separate trial metrics, the selected parameters, and final embedding.
-        ``best_score`` is the selected trial's requested scorer value, while
-        ``best_accuracy`` records its accuracy; ``best_objective`` is the value
-        optimized by Bayesian search.
+        ``best_score`` is raw accuracy or R² depending on ``task``;
+        ``best_objective`` is the value optimized by Bayesian search.
         ``n_components`` is fixed to 2 during tuning.
 
         Parameters
         ----------
         X, y : array-like
-            Feature rows and corresponding single-output class labels.
+            Feature rows and corresponding class labels or a single numeric
+            regression target, depending on ``task``.
         search_space : mapping
             Estimator parameter names mapped to numeric ``(low, high)`` tuple
             bounds or lists of explicit values to try. ``None`` uses defaults for
@@ -1308,7 +1359,7 @@ class IteratedMinimumSpanningTreeEmbedder(
             (1–10), ``gravity_strength`` (0.0–1.0), and
             ``mean_shift_iterations`` (0–5).
         k : int, default=5
-            Number of neighbors in the k-NN scoring classifier.
+            Number of neighbors in the k-NN scoring classifier or regressor.
         n_samples : int, default=40
             Total number of parameter configurations to evaluate, including
             initial Latin hypercube trials.
@@ -1317,22 +1368,26 @@ class IteratedMinimumSpanningTreeEmbedder(
         coverage_weight : float, default=0.4
             Weight of spatial coverage in the combined objective, from zero to
             one. The selected scorer receives the remaining weight.
-        scoring : str or callable, default="accuracy"
-            Scikit-learn scorer name or scorer callable. Shortcuts are
-            ``"accuracy"``, ``"roc"``, ``"apr"``, and ``"f-score"``.
+        scoring : str or callable or None, default=None
+            Classification scorer name/callable or regression ``"r2"``.
+            ``None`` selects accuracy for classification and R² for regression.
         trial_callback : callable or None, default=None
             Function receiving a trial-result dictionary after each evaluation.
         verbose : bool, default=False
             Whether to show optimizer and estimator fit progress.
+        task : {'classification', 'regression'}, default='classification'
+            Whether to tune a class-separating layout or a continuous-target-
+            shaped layout.
 
         Returns
         -------
         scikit-optimize OptimizeResult
-            Search history with selected-scorer values, accuracy, coverage,
-            and combined objective scores, plus the best fitted embedding.
+            Search history with task-appropriate scores, coverage, and combined
+            objective values, plus the best fitted embedding.
             The estimator exposes ``best_params_``, ``best_score_`` (selected
-            scorer), ``best_accuracy_``, ``best_coverage_``,
-            ``best_objective_``, and ``tune_result_``.
+            scorer), ``best_coverage_``, ``best_objective_``, and
+            ``tune_result_``. Regression also exposes ``best_r2_``,
+            ``best_mae_``, ``best_rmse_``, and ``best_spearman_``.
         """
         from ._tuning import tune_estimator
 
@@ -1348,6 +1403,7 @@ class IteratedMinimumSpanningTreeEmbedder(
             scoring=scoring,
             trial_callback=trial_callback,
             verbose=verbose,
+            task=task,
         )
 
     def fit_transform(

@@ -4,8 +4,8 @@
 
 Iterated Minimum Spanning Tree Embedding (IMSTE) places a finite set of
 high-dimensional observations in a lower-dimensional coordinate space. By
-default it is unsupervised; an optional label strength adjusts weights on
-existing graph edges. It builds a weighted graph from ranked spanning-tree
+default it is unsupervised; optional categorical labels or continuous targets
+adjust weights on existing graph edges. It builds a weighted graph from ranked spanning-tree
 iterations. Earlier trees use shorter connections where possible; later trees
 prefer unused edges and reuse bottleneck edges when needed to connect the
 residual graph. A rank-based weight controls the influence of each edge. The
@@ -15,8 +15,8 @@ together with a sampled repulsive loss on non-edges.
 The method is deliberately direct. It uses Euclidean distances, ranked
 spanning-tree construction, and a small differentiable objective. The default
 FAMST backend builds an approximate sparse candidate graph; exact Prim is also
-available. The core estimator accepts optional class labels to reweight
-existing edges and does not define an out-of-sample projection. An optional
+available. The core estimator accepts optional class labels or numeric targets to
+reweight existing edges and does not define an out-of-sample projection. An optional
 `InductiveIMSTE` wrapper learns an approximate MLP projection. This paper
 describes the implementation in this repository and its practical limits; it makes no claim that the method is a
 drop-in replacement for established embedding methods.
@@ -102,6 +102,20 @@ in the attraction objective. Thus $\eta=0$ is the unsupervised objective,
 while positive values strengthen same-class attraction and weaken
 different-class attraction without adding or removing edges. `None` and NaN
 labels are treated as unknown.
+
+For continuous regression targets $y_i$, target-aware fitting uses a robust
+scale $s_y$ estimated from known targets and a positive bandwidth $b$:
+
+$$
+q_{ij}=\exp\left[-\frac{1}{2}\left(\frac{y_i-y_j}{b s_y}\right)^2\right],
+\qquad
+\widetilde{w}_{ij}=\frac{1}{r_{ij}}\exp\left[\lambda(q_{ij}-1/2)\right].
+$$
+
+Thus similar targets receive stronger attraction and distant targets receive
+weaker attraction. Edges with an unknown endpoint keep their ordinary inverse
+rank weight. `target_strength` is $\lambda$ and `target_bandwidth` is $b$;
+the categorical and continuous supervision strengths are mutually exclusive.
 
 For connected feature-based input, when all requested iterations succeed, the
 graph stores $R(n-1)$ edge occurrences. Reused bottleneck edges mean the number
@@ -242,6 +256,8 @@ weights used by optimization.
 | --- | ---: | --- |
 | `n_msts` | 15 | Number of spanning-tree iterations; bottleneck edges can be reused with increased rank |
 | `label_strength` | 0.0 | Exponential same-class and different-class attraction reweighting; pass `y` to `fit` when positive |
+| `target_strength` | 0.0 | Continuous-target similarity reweighting on graph edges; pass numeric `y` when positive |
+| `target_bandwidth` | 1.0 | Gaussian target-similarity bandwidth in robust target-scale units |
 | `mst_method` | `famst` | Approximate sparse FAMST trees or exact Prim trees |
 | `mst_neighbor_backend` | `auto` | FAMST neighbor search: prefer RINND when compatible, or select PyNNDescent / exact MPS search |
 | `mst_neighbors` | 15 | Initial FAMST neighbor count; the builder targets at least `2 * n_msts` |

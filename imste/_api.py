@@ -22,8 +22,9 @@ def fit_graph_transform(
 
     If ``X`` is supplied, IMSTE first embeds those features, then uses that
     layout to initialize optimization over ``distance_graph``. The graph
-    determines the final optimization objective. If ``label_strength`` is
-    positive, ``y`` supplies one categorical label per graph node.
+    determines the final optimization objective. Positive ``label_strength``
+    uses categorical labels in ``y``; positive ``target_strength`` uses
+    continuous numeric targets.
     Alternatively, ``init_features`` supplies features for standardized-PCA
     initialization. These two initialization options cannot be combined.
     Remaining keyword arguments configure the estimator.

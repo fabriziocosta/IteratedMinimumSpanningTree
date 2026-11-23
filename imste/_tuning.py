@@ -9,9 +9,12 @@ from numbers import Integral, Real as NumericReal
 from typing import TYPE_CHECKING, Callable
 
 import numpy as np
+from scipy.special import expit
+from scipy.stats import spearmanr
 from sklearn.base import clone
-from sklearn.model_selection import StratifiedKFold, cross_validate
-from sklearn.neighbors import KNeighborsClassifier
+from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+from sklearn.model_selection import KFold, StratifiedKFold, cross_validate
+from sklearn.neighbors import KNeighborsClassifier, KNeighborsRegressor
 from ._tuning_scoring import classifier_accuracy, resolve_scorer
 from sklearn.utils.validation import check_X_y
 
@@ -26,6 +29,46 @@ _DEFAULT_SEARCH_SPACE = {
     "gravity_strength": (0.0, 1.0),
     "mean_shift_iterations": (0, 5),
 }
+_DEFAULT_REGRESSION_SEARCH_SPACE = {
+    **_DEFAULT_SEARCH_SPACE,
+    "target_strength": (0.0, 4.0),
+    "target_bandwidth": (0.25, 2.0),
+}
+
+
+def _contains_positive_value(specification: object) -> bool:
+    if isinstance(specification, tuple):
+        return float(specification[1]) > 0.0
+    if isinstance(specification, list):
+        return any(float(value) > 0.0 for value in specification)
+    return False
+
+
+def _normalized_r2_utility(score: float) -> float:
+    """Map R² smoothly to [0, 1], anchoring baseline at 0.5 and perfect at 1."""
+    offset = float(np.log1p(-2.0 * np.exp(-2.0)))
+    value = float(expit(2.0 * float(score) + offset) / expit(2.0 + offset))
+    return float(np.clip(value, 0.0, 1.0))
+
+
+def _regression_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> dict[str, float]:
+    score = float(r2_score(y_true, y_pred, force_finite=True))
+    mae = float(mean_absolute_error(y_true, y_pred))
+    rmse = float(np.sqrt(mean_squared_error(y_true, y_pred)))
+    if np.ptp(y_true) == 0.0 or np.ptp(y_pred) == 0.0:
+        spearman = float("nan")
+    else:
+        spearman = float(spearmanr(y_true, y_pred).statistic)
+    return {"r2": score, "mae": mae, "rmse": rmse, "spearman": spearman}
+
+
+def _mean_regression_metrics(fold_metrics: list[dict[str, float]]) -> dict[str, float]:
+    result = {}
+    for name in ("r2", "mae", "rmse", "spearman"):
+        values = np.asarray([metrics[name] for metrics in fold_metrics], dtype=float)
+        finite = values[np.isfinite(values)]
+        result[name] = float(np.mean(finite)) if len(finite) else float("nan")
+    return result
 
 
 def _load_skopt():
@@ -165,11 +208,30 @@ def tune_estimator(
     n_samples: int = 40,
     n_initial_points: int = 20,
     coverage_weight: float = 0.4,
-    scoring: str | Callable = "accuracy",
+    scoring: str | Callable | None = None,
     trial_callback: Callable[[dict[str, object]], None] | None = None,
     verbose: bool = False,
+    task: str = "classification",
 ):
-    """Search using a classification scorer combined with spatial coverage."""
+    """Search for a classification- or regression-aware 2D layout."""
+    if task not in {"classification", "regression"}:
+        raise ValueError("task must be either 'classification' or 'regression'.")
+    if task == "regression":
+        return _tune_regression_estimator(
+            estimator,
+            X,
+            y,
+            search_space=search_space,
+            k=k,
+            n_samples=n_samples,
+            n_initial_points=n_initial_points,
+            coverage_weight=coverage_weight,
+            scoring=scoring,
+            trial_callback=trial_callback,
+            verbose=verbose,
+        )
+    if scoring is None:
+        scoring = "accuracy"
     gp_minimize, Integer, Real, Categorical = _load_skopt()
 
     if isinstance(k, (bool, np.bool_)) or not isinstance(k, (Integral, np.integer)) or k < 1:
@@ -211,6 +273,13 @@ def tune_estimator(
     if search_space is None:
         search_space = _DEFAULT_SEARCH_SPACE
     search_space = dict(search_space)
+    if estimator.target_strength > 0.0 or _contains_positive_value(
+        search_space.get("target_strength", [])
+    ):
+        raise ValueError(
+            "target_strength is for task='regression'; use task='classification' "
+            "with categorical label_strength instead."
+        )
     supervised_tuning = float(estimator.label_strength) > 0.0
     if "label_strength" in search_space:
         strength_values = search_space["label_strength"]
@@ -359,6 +428,7 @@ def tune_estimator(
         estimator.verbose = original_verbose
 
     result.best_params = best_parameters
+    result.task = "classification"
     result.best_score = float(cv_scores[best_index])
     result.best_accuracy = float(accuracy_scores[best_index])
     result.scoring = scoring_name
@@ -377,6 +447,246 @@ def tune_estimator(
     estimator.best_params_ = best_parameters
     estimator.best_score_ = result.best_score
     estimator.best_accuracy_ = result.best_accuracy
+    estimator.best_coverage_ = result.best_coverage
+    estimator.best_objective_ = result.best_objective
+    estimator.tune_result_ = result
+    return result
+
+
+def _tune_regression_estimator(
+    estimator: "IteratedMinimumSpanningTreeEmbedder",
+    X: object,
+    y: object,
+    *,
+    search_space: Mapping[str, object] | None,
+    k: int,
+    n_samples: int,
+    n_initial_points: int,
+    coverage_weight: float,
+    scoring: str | Callable | None,
+    trial_callback: Callable[[dict[str, object]], None] | None,
+    verbose: bool,
+):
+    """Tune a numeric-target-aware layout against cross-validated R²."""
+    gp_minimize, Integer, Real, Categorical = _load_skopt()
+    if scoring is None:
+        scoring = "r2"
+    if not isinstance(scoring, str) or scoring.strip().lower() not in {"r2", "r2_score"}:
+        raise ValueError("Regression tuning currently supports scoring='r2' only.")
+    if isinstance(k, (bool, np.bool_)) or not isinstance(k, (Integral, np.integer)) or k < 1:
+        raise ValueError("k must be a positive integer.")
+    if (isinstance(n_samples, (bool, np.bool_))
+            or not isinstance(n_samples, (Integral, np.integer)) or n_samples < 1):
+        raise ValueError("n_samples must be a positive integer.")
+    if (isinstance(n_initial_points, (bool, np.bool_))
+            or not isinstance(n_initial_points, (Integral, np.integer))
+            or n_initial_points < 1):
+        raise ValueError("n_initial_points must be a positive integer.")
+    if (isinstance(coverage_weight, (bool, np.bool_))
+            or not isinstance(coverage_weight, NumericReal)
+            or not np.isfinite(coverage_weight)
+            or not 0.0 <= coverage_weight <= 1.0):
+        raise ValueError("coverage_weight must be a finite number in [0, 1].")
+    if trial_callback is not None and not callable(trial_callback):
+        raise ValueError("trial_callback must be callable or None.")
+    if not isinstance(verbose, (bool, np.bool_)):
+        raise ValueError("verbose must be a boolean.")
+
+    X_checked, y_checked = check_X_y(
+        X, y, accept_sparse="csr", ensure_2d=True, dtype=None
+    )
+    if y_checked.ndim != 1:
+        raise ValueError("Regression y must be a one-dimensional numeric target.")
+    try:
+        y_checked = np.asarray(y_checked, dtype=np.float64)
+    except (TypeError, ValueError) as error:
+        raise ValueError("Regression y must contain numeric targets.") from error
+    if len(y_checked) < 5:
+        raise ValueError("5-fold regression tuning requires at least 5 samples.")
+    if not np.isfinite(y_checked).all():
+        raise ValueError("Regression tuning requires finite targets with no missing values.")
+    if np.ptp(y_checked) == 0.0:
+        raise ValueError("Regression tuning requires a non-constant target.")
+    if estimator.label_strength > 0.0:
+        raise ValueError("task='regression' cannot be combined with label_strength.")
+
+    if search_space is None:
+        search_space = _DEFAULT_REGRESSION_SEARCH_SPACE
+    search_space = dict(search_space)
+    if _contains_positive_value(search_space.get("label_strength", [])):
+        raise ValueError("task='regression' cannot search categorical label_strength.")
+    names, dimensions = _search_dimensions(
+        estimator, search_space, Integer, Real, Categorical
+    )
+    supervised_tuning = float(estimator.target_strength) > 0.0
+    if "target_strength" in search_space:
+        supervised_tuning |= _contains_positive_value(search_space["target_strength"])
+    cv = KFold(n_splits=5, shuffle=True, random_state=estimator.random_state)
+    folds = list(cv.split(X_checked, y_checked))
+    smallest_training_fold = min(len(training) for training, _ in folds)
+    if k > smallest_training_fold:
+        raise ValueError(
+            f"k={k} exceeds the smallest 5-fold training split ({smallest_training_fold})."
+        )
+
+    r2_scores: list[float] = []
+    mae_scores: list[float] = []
+    rmse_scores: list[float] = []
+    spearman_scores: list[float] = []
+    coverage_scores: list[float] = []
+    utility_scores: list[float] = []
+    objective_scores: list[float] = []
+    best_objective_so_far = -np.inf
+    best_metrics_so_far: dict[str, float] | None = None
+    best_parameters_so_far: dict[str, object] | None = None
+
+    def evaluate_embedding(embedding: np.ndarray) -> dict[str, float]:
+        fold_metrics = []
+        for training_indices, validation_indices in folds:
+            regressor = KNeighborsRegressor(n_neighbors=int(k))
+            regressor.fit(embedding[training_indices], y_checked[training_indices])
+            predictions = regressor.predict(embedding[validation_indices])
+            fold_metrics.append(
+                _regression_metrics(y_checked[validation_indices], predictions)
+            )
+        return _mean_regression_metrics(fold_metrics)
+
+    def objective(values):
+        nonlocal best_objective_so_far, best_metrics_so_far, best_parameters_so_far
+        parameters = dict(zip(names, values))
+        candidate = clone(estimator)
+        candidate.set_params(n_components=2, **parameters)
+        candidate.verbose = bool(verbose)
+
+        trial_metrics = []
+        fold_coverages = []
+        first_embedding = None
+        if supervised_tuning:
+            for training_indices, _ in folds:
+                fold_target = np.full(len(y_checked), np.nan, dtype=np.float64)
+                fold_target[training_indices] = y_checked[training_indices]
+                fold_estimator = clone(candidate)
+                fold_embedding = fold_estimator.fit_transform(
+                    X_checked,
+                    y=fold_target if fold_estimator.target_strength > 0.0 else None,
+                )
+                if first_embedding is None:
+                    first_embedding = fold_embedding
+                trial_metrics.append(evaluate_embedding(fold_embedding))
+                fold_coverages.append(spatial_coverage_score(fold_embedding))
+            metrics = _mean_regression_metrics(trial_metrics)
+            coverage = float(np.mean(fold_coverages))
+            embedding = first_embedding
+        else:
+            embedding = candidate.fit_transform(X_checked)
+            metrics = evaluate_embedding(embedding)
+            coverage = spatial_coverage_score(embedding)
+
+        utility = _normalized_r2_utility(metrics["r2"])
+        objective_score = (
+            (1.0 - float(coverage_weight)) * utility
+            + float(coverage_weight) * coverage
+        )
+        r2_scores.append(metrics["r2"])
+        mae_scores.append(metrics["mae"])
+        rmse_scores.append(metrics["rmse"])
+        spearman_scores.append(metrics["spearman"])
+        coverage_scores.append(coverage)
+        utility_scores.append(utility)
+        objective_scores.append(objective_score)
+        is_best = objective_score > best_objective_so_far
+        if is_best:
+            best_objective_so_far = objective_score
+            best_metrics_so_far = metrics.copy()
+            best_parameters_so_far = parameters.copy()
+        if trial_callback is not None:
+            trial_result = {
+                "task": "regression",
+                "trial": len(r2_scores),
+                "parameters": parameters.copy(),
+                "score": metrics["r2"],
+                "scoring": "r2",
+                **metrics,
+                "r2_utility": utility,
+                "coverage": coverage,
+                "objective": objective_score,
+                "best_score": float(best_metrics_so_far["r2"]),
+                "best_r2": float(best_metrics_so_far["r2"]),
+                "best_mae": float(best_metrics_so_far["mae"]),
+                "best_rmse": float(best_metrics_so_far["rmse"]),
+                "best_spearman": float(best_metrics_so_far["spearman"]),
+                "best_coverage": float(coverage_scores[int(np.argmax(objective_scores))]),
+                "best_objective": float(best_objective_so_far),
+                "best_params": best_parameters_so_far.copy(),
+                "embedding": embedding.copy(),
+                "is_best": is_best,
+            }
+            trial_callback(trial_result)
+        return -objective_score
+
+    initial_count = min(int(n_initial_points), int(n_samples))
+    with warnings.catch_warnings():
+        if not verbose:
+            warnings.filterwarnings(
+                "ignore",
+                message=r"The objective has been evaluated at point .* before, using random point .*",
+                category=UserWarning,
+                module=r"skopt\.optimizer\.optimizer",
+            )
+        result = gp_minimize(
+            objective,
+            dimensions,
+            n_calls=int(n_samples),
+            n_initial_points=initial_count,
+            initial_point_generator="lhs",
+            random_state=estimator.random_state,
+            verbose=bool(verbose),
+        )
+
+    best_index = int(np.argmin(result.func_vals))
+    best_parameters = dict(zip(names, result.x))
+    estimator.set_params(n_components=2, **best_parameters)
+    original_verbose = estimator.verbose
+    try:
+        estimator.verbose = bool(verbose)
+        estimator.fit(
+            X_checked,
+            y=y_checked if estimator.target_strength > 0.0 else None,
+        )
+    finally:
+        estimator.verbose = original_verbose
+
+    result.task = "regression"
+    result.best_params = best_parameters
+    result.best_score = float(r2_scores[best_index])
+    result.best_r2 = result.best_score
+    result.best_mae = float(mae_scores[best_index])
+    result.best_rmse = float(rmse_scores[best_index])
+    result.best_spearman = float(spearman_scores[best_index])
+    result.scoring = "r2"
+    result.best_coverage = float(coverage_scores[best_index])
+    result.best_r2_utility = float(utility_scores[best_index])
+    result.best_objective = float(objective_scores[best_index])
+    result.coverage_weight = float(coverage_weight)
+    result.search_space = search_space
+    result.k = int(k)
+    result.n_samples = int(n_samples)
+    result.n_initial_points = initial_count
+    result.cv_scores = np.asarray(r2_scores, dtype=float)
+    result.r2_scores = result.cv_scores
+    result.mae_scores = np.asarray(mae_scores, dtype=float)
+    result.rmse_scores = np.asarray(rmse_scores, dtype=float)
+    result.spearman_scores = np.asarray(spearman_scores, dtype=float)
+    result.coverage_scores = np.asarray(coverage_scores, dtype=float)
+    result.r2_utility_scores = np.asarray(utility_scores, dtype=float)
+    result.objective_scores = np.asarray(objective_scores, dtype=float)
+    result.best_embedding = estimator.embedding_.copy()
+    estimator.best_params_ = best_parameters
+    estimator.best_score_ = result.best_score
+    estimator.best_r2_ = result.best_r2
+    estimator.best_mae_ = result.best_mae
+    estimator.best_rmse_ = result.best_rmse
+    estimator.best_spearman_ = result.best_spearman
     estimator.best_coverage_ = result.best_coverage
     estimator.best_objective_ = result.best_objective
     estimator.tune_result_ = result

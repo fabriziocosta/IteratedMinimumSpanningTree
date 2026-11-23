@@ -81,6 +81,75 @@ def _label_edge_multipliers(
     return np.exp(np.maximum(log_multipliers, lower_bound))
 
 
+def _target_edge_multipliers(
+    targets: object | None,
+    edges: np.ndarray,
+    strength: float,
+    bandwidth: float,
+    n_samples: int,
+) -> np.ndarray:
+    """Return continuous-target similarity multipliers for graph edges.
+
+    Target differences are scaled by a robust spread estimate. Similar target
+    values increase attraction; dissimilar values reduce it. Edges with a
+    missing target at either endpoint retain their unmodified weight.
+    """
+    multipliers = np.ones(len(edges), dtype=np.float64)
+    if strength == 0.0:
+        return multipliers
+    if targets is None:
+        raise ValueError("y is required when target_strength is greater than zero.")
+    values = np.asarray(targets, dtype=object)
+    if values.ndim != 1 or values.shape[0] != n_samples:
+        raise ValueError("Regression y must be one-dimensional with one target per sample.")
+
+    numeric = np.full(n_samples, np.nan, dtype=np.float64)
+    for index, value in enumerate(values):
+        if value is None:
+            continue
+        if not isinstance(value, numbers.Number) or isinstance(value, (bool, np.bool_)):
+            raise ValueError("Regression y must contain numeric values or missing entries.")
+        number = float(value)
+        if np.isnan(number):
+            continue
+        if not np.isfinite(number):
+            raise ValueError("Regression y must contain only finite numeric targets.")
+        numeric[index] = number
+
+    known = numeric[np.isfinite(numeric)]
+    if len(known) < 2:
+        raise ValueError("target_strength requires at least two known targets.")
+    if np.ptp(known) == 0.0:
+        raise ValueError("target_strength requires non-constant target values.")
+
+    q25, q75 = np.quantile(known, [0.25, 0.75])
+    scale = float(q75 - q25)
+    if not np.isfinite(scale) or scale <= 0.0:
+        q05, q95 = np.quantile(known, [0.05, 0.95])
+        scale = float(q95 - q05)
+    if not np.isfinite(scale) or scale <= 0.0:
+        scale = float(np.std(known))
+    if not np.isfinite(scale) or scale <= 0.0:
+        raise ValueError("Regression y must have a positive robust target scale.")
+
+    if not len(edges):
+        return multipliers
+    log_multipliers = np.zeros(len(edges), dtype=np.float64)
+    for index, (left, right) in enumerate(edges):
+        left_value, right_value = numeric[left], numeric[right]
+        if not np.isfinite(left_value) or not np.isfinite(right_value):
+            continue
+        scaled_difference = abs(left_value - right_value) / (scale * bandwidth)
+        similarity = np.exp(-0.5 * min(scaled_difference, 40.0) ** 2)
+        log_multipliers[index] = strength * (similarity - 0.5)
+
+    lower_bound = np.log(np.finfo(np.float32).tiny)
+    upper_bound = np.log(np.finfo(np.float32).max)
+    # Keep the neutral-similarity multiplier anchored at one while ensuring
+    # weights remain representable by the float32 optimizer backends.
+    return np.exp(np.clip(log_multipliers, lower_bound, upper_bound))
+
+
 def _normalized_edge_weights(ranks: np.ndarray, multipliers: np.ndarray) -> np.ndarray:
     """Combine inverse ranks with label multipliers and normalize to unit sum."""
     weights = np.asarray(multipliers, dtype=np.float64) / np.asarray(ranks)

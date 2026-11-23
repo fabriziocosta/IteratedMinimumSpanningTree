@@ -19,7 +19,7 @@ an MLP that maps new rows into that space.
 
 ## Install
 
-After the first PyPI release, install the core package with:
+Install the core package from PyPI with:
 
 ```bash
 python -m pip install imste
@@ -57,8 +57,9 @@ preset needs NSPPK, installed from its repository with
 [preprocessing guide](docs/preprocessing-guide.md) for built-in modality presets
 and custom scikit-learn transformers.
 
-To tune IMSTE against labeled 2D separation, install the optional Bayesian
-optimization dependency with `python -m pip install "imste[tuning]"`.
+To tune IMSTE against class separation or a continuous numeric target, install
+the optional Bayesian optimization dependency with
+`python -m pip install "imste[tuning]"`.
 
 Both estimators accept dense arrays and SciPy CSR matrices. The graph builders
 keep CSR inputs sparse. `InductiveIMSTE` densifies only each MLP mini-batch.
@@ -78,8 +79,10 @@ distance. Disconnected components remain separate spanning forests. Each
 iteration prefers unused edges; when needed, it reuses short edges and
 increments their rank. The optimizer uses the usual inverse-rank attraction
 weights. With positive `label_strength`, pass `y` with one class label per
-graph node to adjust those weights. Optionally pass `init_features` with one
-feature row per graph node to seed the coordinates from standardized PCA
+graph node to adjust those weights. For a continuous outcome, use positive
+`target_strength` with numeric `y`; `target_bandwidth` sets its Gaussian
+similarity scale. Optionally pass `init_features` with one feature row per graph
+node to seed the coordinates from standardized PCA
 scores. These features affect only initialization; the supplied graph remains
 the optimizer's objective. Without `init_features`, seeded random
 initialization is used. Use `fit_graph()` when
@@ -169,6 +172,14 @@ The best settings are refitted on all rows and stored on `mapper`; the returned
 scikit-optimize result contains the search history and final embedding.
 See the [tuning guide](docs/tuning-guide.md) for scorer shortcuts, the combined
 score and coverage objective, result fields, and live-progress callback.
+
+For a continuous outcome, call `tune(..., task="regression")`. Regression
+tuning masks held-out targets while target-aware layouts are fitted and scores
+each layout with five-fold k-NN regression. It reports R², MAE, RMSE, and
+Spearman correlation; positive `target_strength` and `target_bandwidth`
+control how numeric target similarity changes graph-edge attraction. See the
+[supervised guide](docs/supervised-guide.md) for direct fitting and the
+[tuning guide](docs/tuning-guide.md) for search settings and result details.
 
 ### Fit from a distance graph
 
@@ -261,6 +272,13 @@ For an edge of rank `r`, IMSTE multiplies its usual `1 / r` weight by
 label keep their usual weight. `label_strength=0` preserves unsupervised
 behavior. Labels adjust attraction only; they do not add graph edges or
 directly repel different classes.
+
+For a numeric target, configure `target_strength` and `target_bandwidth`
+instead. IMSTE robustly scales target differences and applies a Gaussian edge
+similarity multiplier: similar target values strengthen attraction and distant
+values weaken it. Missing target values leave incident edges at their ordinary
+weights. Categorical and continuous supervision strengths cannot both be
+positive. See the [supervised guide](docs/supervised-guide.md) for examples.
 
 ## How it works
 
@@ -452,7 +470,9 @@ library defaults; notebook recommendations can intentionally differ.
 | `learning_rate` | `0.05` | Coordinate optimizer learning rate |
 | `negative_ratio` | `5` | Non-neighbors sampled per endpoint of each positive edge |
 | `lambda_rep` | `0.5` | Repulsion share, from 0 to 1 |
-| `label_strength` | `0.0` | Exponential same-class/different-class MST edge reweighting; positive values require `y` in `fit` |
+| `label_strength` | `0.0` | Exponential same-class/different-class MST edge reweighting; positive values require categorical `y` in `fit` |
+| `target_strength` | `0.0` | Continuous-target similarity edge reweighting; positive values require numeric `y` in `fit` |
+| `target_bandwidth` | `1.0` | Gaussian target-similarity bandwidth in robust target-scale units |
 | `logistic_margin` | `1.0` | Squared-distance margin for repulsion |
 | `logistic_temperature` | `0.5` | Logistic repulsion softness; must be positive |
 | `epsilon` | `1e-4` | Smoothing for the logarithmic attraction |

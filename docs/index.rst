@@ -19,8 +19,9 @@ scikit-learn's built-in digits dataset and does not download data:
    ).fit_transform(X)
    print(embedding.shape)  # (1797, 2)
 
-With the default ``label_strength=0``, the coordinates are unsupervised; digit
-labels are available separately for coloring or evaluation. Start with the
+With the default ``label_strength=0`` and ``target_strength=0``, the coordinates
+are unsupervised; digit labels are available separately for coloring or
+evaluation. Start with the
 :doc:`getting-started` guide for a
 plotting example and notes on scaling and graph construction.
 
@@ -28,10 +29,11 @@ Choose a path
 -------------
 
 * **Numeric feature rows:** :doc:`getting-started`
-* **Label-guided embeddings:** :doc:`supervised-guide`
+* **Categorical or numeric target-guided embeddings:** :doc:`supervised-guide`
 * **Outlier ranking:** :doc:`outlier-detection`
 * **New rows after fitting:** :doc:`inductive-guide`
 * **Text, images, or graph inputs:** :doc:`preprocessing-guide`
+* **Twitter archive batches and regression layout:** :doc:`twitter-dataset`
 * **A supplied sparse distance graph:** see :doc:`api`
 * **Faster initial layouts:** :doc:`multilevel-initialization`
 * **Parameter search and visualization:** :doc:`tuning-guide` and
@@ -56,6 +58,7 @@ default, exact Prim is available, and CPU optimization works without PyTorch.
    :caption: Guides
 
    preprocessing-guide
+   twitter-dataset
    multilevel-initialization
    tuning-guide
    visualization-guide

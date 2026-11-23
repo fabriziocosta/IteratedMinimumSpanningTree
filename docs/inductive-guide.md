@@ -13,8 +13,9 @@ python -m pip install "imste[gpu]"
 
 ## Fit and project
 
-The supervised example below assumes `X_train` and the matching categorical
-labels `y_train` are already prepared.
+The supervised example below assumes `X_train` and matching categorical labels
+`y_train` are already prepared. For a continuous outcome, configure the
+embedder with `target_strength` and pass the numeric training target as `y`.
 
 ```python
 from imste import IteratedMinimumSpanningTreeEmbedder
@@ -43,8 +44,9 @@ coordinates. `reference_embedding_` stores the IMSTE coordinates;
 `transform()` always returns MLP predictions, including for training rows.
 Predictions can differ from the reference coordinates, and adding new rows does
 not extend or re-optimize the fitted graph.
-When the configured embedder has positive `label_strength`, pass `y_train` to
-`fit` so its reference embedding uses the supervised edge weights.
+When the configured embedder has positive `label_strength` or
+`target_strength`, pass the corresponding categorical labels or numeric targets
+as `y` so its reference embedding uses the supervised edge weights.
 
 ## Training behavior and settings
 

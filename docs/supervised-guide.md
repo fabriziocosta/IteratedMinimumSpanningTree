@@ -49,3 +49,31 @@ embedding = mapper.fit_graph_transform(distance_graph, y=labels)
 To search for a useful label strength alongside other estimator parameters,
 see the [tuning guide](tuning-guide.md), which describes the masked-fold
 protocol used for supervised tuning.
+
+## Fit with a continuous target
+
+For a numeric outcome, use `target_strength` and `target_bandwidth` instead of
+`label_strength`. Targets are robustly scaled, then graph edges receive a
+Gaussian similarity weight: similar target values strengthen their attraction
+and distant values weaken it. Edges touching an unknown target keep their
+ordinary weight. The target bandwidth is measured in robust target-scale units.
+
+```python
+import numpy as np
+from imste import IteratedMinimumSpanningTreeEmbedder
+
+target = np.log1p(retweet_counts)
+mapper = IteratedMinimumSpanningTreeEmbedder(
+    target_strength=1.0,
+    target_bandwidth=1.0,
+    random_state=42,
+)
+embedding = mapper.fit_transform(X, y=target)
+```
+
+The categorical and continuous supervision modes are mutually exclusive. A
+positive `target_strength` requires a one-dimensional, non-constant numeric
+target with at least two known values. `None` and NaN entries are treated as
+unknown. To tune a target-shaped layout against held-out regression
+performance, see the `task="regression"` section in the
+[tuning guide](tuning-guide.md).

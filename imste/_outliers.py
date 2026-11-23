@@ -225,8 +225,8 @@ def detect_outliers(
         Keyword parameters passed to ``IteratedMinimumSpanningTreeEmbedder``.
         ``n_components`` defaults to 10 and can be overridden here.
     y : array-like, default=None
-        Optional labels passed to the estimator. Required when
-        ``label_strength`` is positive.
+        Optional labels or numeric targets passed to the estimator. Required
+        when ``label_strength`` or ``target_strength`` is positive.
 
     Returns
     -------
@@ -287,10 +287,10 @@ def _outlier_result(
                 raise ValueError(
                     "Comparing n_components requires a feature-based fitted estimator."
                 )
-            if estimator.label_strength > 0 and y is None:
+            if (estimator.label_strength > 0 or estimator.target_strength > 0) and y is None:
                 raise ValueError(
                     "Pass y when refitting multiple dimensions with positive "
-                    "label_strength."
+                    "label_strength or target_strength."
                 )
             component_estimator = clone(estimator).set_params(
                 n_components=dimension,

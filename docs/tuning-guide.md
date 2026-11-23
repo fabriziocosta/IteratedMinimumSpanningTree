@@ -1,8 +1,9 @@
-# Tuning IMSTE layouts for class separation and space use
+# Tuning IMSTE layouts for supervised targets and space use
 
 `IteratedMinimumSpanningTreeEmbedder.tune()` searches IMSTE parameters for a
-two-dimensional layout that balances a selected classification score with
-use of the plot area. It accepts scikit-learn scorers and uses
+two-dimensional layout that balances a selected prediction score with use of
+the plot area. Classification remains the default; `task="regression"`
+supports continuous targets. The search uses
 scikit-optimize's Gaussian-process search with Latin hypercube initial samples.
 
 Install the optional optimizer with:
@@ -18,14 +19,15 @@ loading and display helpers are in
 
 ## Plan for the compute cost
 
-The default search performs 40 full embedding fits and then one final fit of
-the selected settings. Every trial embeds all rows passed to `tune()`; the
-cross-validation scores labels in that embedding and does not refit IMSTE per
-fold. Cost therefore grows with both the dataset and number of trials. For an
-initial check, use a small representative dataset or a balanced subset and a
-shorter budget such as `n_samples=4, n_initial_points=4`. Keep at least five
-examples of each class in any subset because tuning uses 5-fold stratified
-cross-validation. The two-dimensional
+The default classification search performs 40 full embedding fits and then
+one final fit of the selected settings. Unsupervised trials score labels in
+the fitted embedding; supervised classification and regression use five-fold
+masked-target fits when positive target strength is active, followed by one
+final fit. Cost grows with the dataset, number of trials, and whether each
+trial uses fold fits. For an initial check, use a small representative dataset
+or a balanced subset and a shorter budget such as
+`n_samples=4, n_initial_points=4`. Keep at least five examples per class for
+classification; regression requires at least five rows. The two-dimensional
 [getting-started example](getting-started.md) is a quick place to begin before
 moving to MNIST.
 
@@ -77,8 +79,45 @@ objective = (1 - coverage_weight) * scorer_value + coverage_weight * coverage
 ```
 
 The default `coverage_weight=0.4` gives the selected metric 60% of the
-objective and coverage 40%. Set it to zero to optimize only the classification
-score. Each trial also records accuracy separately, whatever scorer is selected.
+objective and coverage 40%. Set it to zero to optimize only the task score.
+Classification trials also record accuracy separately, whatever scorer is
+selected.
+
+## Regression-aware tuning
+
+Pass `task="regression"` to use a numeric target to shape graph-edge attraction
+weights and evaluate how well the resulting coordinates predict held-out
+targets. Regression uses shuffled five-fold `KFold` and a `KNeighborsRegressor`.
+In each supervised fold, validation target values are masked while fitting the
+layout; feature rows remain transductive, as in the classification workflow.
+If the configured `target_strength` is positive, or its search range/list
+includes a positive value, every trial uses this fold protocol, including
+proposals whose strength is zero.
+
+The default regression search space extends the common IMSTE parameters with
+`target_strength` in `(0, 4)` and `target_bandwidth` in `(0.25, 2)`. Bandwidth
+is measured in robust target-scale units, calculated from training-fold values
+only. `label_strength` and `target_strength` cannot both be positive.
+
+R² is the only regression search score in this first version. It is reported
+raw, and a smooth bounded transform is used when blending it with spatial
+coverage: R²=0 maps to 0.5 and R²=1 maps to 1. Results also record MAE, RMSE,
+and Spearman correlation as diagnostics. Regression tuning requires at least
+five rows and finite, non-constant target values. For a skewed count target,
+transform it before tuning, for example with `np.log1p`.
+
+```python
+target = np.log1p(retweet_counts)
+result = mapper.tune(
+    X, target, task="regression", n_samples=20, n_initial_points=10
+)
+print(result.best_r2, result.best_mae, result.best_spearman)
+print(result.best_params["target_strength"], result.best_params["target_bandwidth"])
+```
+
+The estimator is refitted on all targets with the best parameters. Regression
+results expose `r2_scores`, `mae_scores`, `rmse_scores`, and
+`spearman_scores` alongside coverage and objective histories.
 
 ## Search space and budget
 
@@ -124,9 +163,11 @@ smaller, all trials use the initial-point sampler. Each embedding fit uses the
 estimator's `n_epochs` setting, which defaults to 200. The estimator's
 `random_state` seeds the search and the shuffled CV folds.
 
-Each configuration fits IMSTE on the full supplied data, followed by one final
-fit of the selected configuration. Search cost therefore grows with the number
-of trials and the cost of an IMSTE fit. Set `n_samples` and
+Each configuration fits IMSTE once when the layout is unsupervised, or once per
+fold when the configured or searched strength enables supervision (even for a
+zero-strength proposal in a supervised search), followed by one final fit of
+the selected configuration. Search cost therefore grows with the number of
+trials and the cost of an IMSTE fit. Set `n_samples` and
 `n_initial_points` explicitly when you need a smaller experiment.
 
 ## Results and live progress
@@ -138,19 +179,23 @@ additional fields:
 | --- | --- |
 | `best_params` | Parameter values selected by the combined objective |
 | `best_score` | Selected scorer value for the best configuration |
-| `best_accuracy` | 5-fold accuracy for that configuration |
+| `best_accuracy` | 5-fold accuracy for classification tuning |
+| `best_r2`, `best_mae`, `best_rmse`, `best_spearman` | Regression score and diagnostics |
 | `scoring` | Resolved scorer shortcut/name |
 | `best_coverage` | Spatial coverage score for the selected configuration |
 | `best_objective` | Positive weighted score optimized by the search |
 | `cv_scores` | Selected scorer value for every trial |
-| `accuracy_scores` | Accuracy for every trial |
+| `accuracy_scores` | Accuracy for every classification trial |
+| `r2_scores`, `mae_scores`, `rmse_scores`, `spearman_scores` | Regression metrics for every trial |
 | `coverage_scores` | Coverage for every trial |
 | `objective_scores` | Positive weighted score for every trial |
 | `best_embedding` | Final refitted embedding |
 
 The estimator is refitted on all rows using `best_params`. Its corresponding
-attributes are `best_params_`, `best_score_` (selected scorer), `best_accuracy_`,
-`best_coverage_`, `best_objective_`, and `tune_result_`. The native
+attributes are `best_params_`, `best_score_` (accuracy or raw R²),
+`best_coverage_`, `best_objective_`, and `tune_result_`. Classification also
+exposes `best_accuracy_`; regression exposes `best_r2_`, `best_mae_`,
+`best_rmse_`, and `best_spearman_`. The native
 scikit-optimize `result.fun` remains negative because the optimizer minimizes;
 use `best_objective` for the positive score.
 
@@ -158,8 +203,8 @@ use `best_objective` for the positive score.
 containing:
 
 - `trial`, `parameters`, and `embedding` for the current proposal
-- `score` (selected scorer value), `accuracy`, `coverage`, and `objective`
-- `best_score`, `best_accuracy`, `best_coverage`,
+- `score` (accuracy or raw R²), task metrics, `coverage`, and `objective`
+- `best_score`, task-specific best metrics, `best_coverage`,
   `best_objective`, and `best_params` for the best proposal so far
 - `is_best`, which is true when the current trial improves the combined score
 
@@ -177,9 +222,10 @@ set `verbose=True` to also show optimizer and fit progress.
 
 ## Data requirements
 
-`X` and `y` must have the same number of rows, and `y` must contain at least two
-classes with at least five examples in every class. `k` must fit within the
-smallest 5-fold training split. The MNIST notebook lets you select MNIST,
+`X` and `y` must have the same number of rows. Classification requires at least
+two classes with at least five examples in every class. Regression requires at
+least five finite targets with non-zero variance. In both modes, `k` must fit
+within the smallest 5-fold training split. The MNIST notebook lets you select MNIST,
 Fashion-MNIST, or Kuzushiji-MNIST and defaults to a balanced sample of 2,000
 images per class. It reads the repository cache when available and downloads
 the selected dataset otherwise.

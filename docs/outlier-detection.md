@@ -36,7 +36,7 @@ When `n_components` is a sequence, IMSTE refits cloned estimators for each
 requested dimension, reusing the current fitted model when its dimension is in
 the sequence. The original estimator remains unchanged. Multiple dimensions
 require a feature-based fit; pass `y` if refitting uses positive
-`label_strength`.
+`label_strength` or `target_strength`.
 The standalone
 `detect_outliers(X, k=20, estimator_params=None)` convenience function remains
 available and defaults to `n_components=10`.
