@@ -112,6 +112,104 @@ def _compatible_neighbor_graph(
     return selected_indices, selected_distances.astype(np.float32, copy=False)
 
 
+def _sample_community_membership(
+    indices: np.ndarray,
+    anchor_indices: np.ndarray,
+    anchor_membership: np.ndarray,
+    region_count: int,
+) -> tuple[np.ndarray, int]:
+    """Propagate sampled Leiden labels through the ordered feature KNN graph."""
+    from numba import njit
+
+    n_samples = len(indices)
+    membership = np.full(n_samples, -1, dtype=np.int32)
+    membership[anchor_indices] = anchor_membership
+
+    @njit(cache=True)
+    def propagate(graph_indices, labels, max_passes):
+        n = graph_indices.shape[0]
+        width = graph_indices.shape[1]
+        assigned = labels.copy()
+        for _ in range(max_passes):
+            updated = assigned.copy()
+            changed = 0
+            for point in range(n):
+                if assigned[point] >= 0:
+                    continue
+                for offset in range(width):
+                    neighbor = graph_indices[point, offset]
+                    if neighbor >= 0 and neighbor < n and assigned[neighbor] >= 0:
+                        updated[point] = assigned[neighbor]
+                        changed += 1
+                        break
+            assigned = updated
+            if changed == 0:
+                break
+        return assigned
+
+    membership = propagate(np.ascontiguousarray(indices), membership, 64)
+    unresolved = membership < 0
+    # A disconnected component with no sampled anchor has no evidence-based
+    # community assignment; give it the largest sampled region deterministically.
+    fallback = int(unresolved.sum())
+    if fallback:
+        membership[unresolved] = int(np.argmax(np.bincount(
+            anchor_membership, minlength=region_count
+        )))
+    return membership, fallback
+
+
+def _coarse_neighbor_graph_edges(
+    indices: np.ndarray,
+    distances: np.ndarray,
+    radii: np.ndarray,
+    cells: np.ndarray,
+    cell_count: int,
+    *,
+    batch_size: int = 100000,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Aggregate the full KNN graph into a sparse sampled-cell graph."""
+    from scipy.sparse import coo_matrix, csr_matrix
+
+    width = indices.shape[1]
+    coarse = csr_matrix((cell_count, cell_count), dtype=np.float32)
+    for start in range(0, len(indices), batch_size):
+        stop = min(start + batch_size, len(indices))
+        source_cells = np.repeat(cells[start:stop], width)
+        source_points = np.repeat(np.arange(start, stop, dtype=np.int64), width)
+        raw_neighbors = indices[start:stop].reshape(-1)
+        raw_distances = distances[start:stop].reshape(-1)
+        valid = (
+            (raw_neighbors >= 0)
+            & (raw_neighbors < len(cells))
+            & np.isfinite(raw_distances)
+        )
+        source_cells = source_cells[valid]
+        source_points = source_points[valid]
+        target_cells = cells[raw_neighbors[valid]]
+        edge_distances = raw_distances[valid]
+        keep = (target_cells >= 0) & (source_cells != target_cells)
+        weights = np.exp(
+            -edge_distances[keep] / np.maximum(radii[source_points[keep]], 1e-12)
+        ).astype(np.float32)
+        batch_graph = coo_matrix(
+            (weights, (source_cells[keep], target_cells[keep])),
+            shape=(cell_count, cell_count),
+            dtype=np.float32,
+        ).tocsr()
+        batch_graph.sum_duplicates()
+        coarse += batch_graph
+    coarse.setdiag(0)
+    coarse.eliminate_zeros()
+    coarse.sum_duplicates()
+    edges = coarse.tocoo()
+    return (
+        edges.row.astype(np.int64, copy=False),
+        edges.col.astype(np.int64, copy=False),
+        edges.data.astype(np.float32, copy=False),
+    )
+
+
 def _apply_local_distance_floor(
     embedding: np.ndarray,
     neighbor_indices: np.ndarray,
@@ -160,43 +258,68 @@ def _apply_local_distance_floor(
         }
     reference_distance = float(np.median(positive_nearest))
     threshold = float(min_dist_fraction * reference_distance)
+    if int(iterations) == 0:
+        return coordinates, {
+            "min_dist_reference": reference_distance,
+            "min_dist_threshold": threshold,
+            "min_dist_pairs_adjusted": 0,
+        }
 
     pairs = np.unique(np.sort(np.column_stack((rows, columns)), axis=1), axis=0)
     left, right = pairs[:, 0], pairs[:, 1]
-    result = coordinates.copy()
-    ever_adjusted = np.zeros(len(pairs), dtype=bool)
-    for _ in range(iterations):
-        delta = result[left] - result[right]
-        distance = np.linalg.norm(delta, axis=1)
-        shortfall = np.maximum(threshold - distance, 0.0)
-        active = shortfall > 0
-        if not np.any(active):
-            break
-        ever_adjusted |= active
+    from numba import njit
 
-        direction = np.zeros_like(delta)
-        nonzero = distance > 1e-12
-        direction[nonzero] = delta[nonzero] / distance[nonzero, None]
-        if np.any(~nonzero & active):
-            coincident = ~nonzero & active
-            angles = np.mod(
-                left[coincident] * 12.9898 + right[coincident] * 78.233,
-                2 * np.pi,
-            )
-            direction[coincident, 0] = np.cos(angles)
-            direction[coincident, 1] = np.sin(angles)
+    @njit(cache=True)
+    def relax(current, pair_left, pair_right, target, max_iterations):
+        result = current.copy()
+        adjusted = np.zeros(pair_left.size, dtype=np.bool_)
+        n_points = result.shape[0]
+        for _ in range(max_iterations):
+            displacement = np.zeros_like(result)
+            degree = np.zeros(n_points, dtype=np.float64)
+            active_count = 0
+            for pair in range(pair_left.size):
+                left_index = pair_left[pair]
+                right_index = pair_right[pair]
+                dx = result[left_index, 0] - result[right_index, 0]
+                dy = result[left_index, 1] - result[right_index, 1]
+                distance = np.sqrt(dx * dx + dy * dy)
+                shortfall = target - distance
+                if shortfall <= 0.0:
+                    continue
+                adjusted[pair] = True
+                active_count += 1
+                if distance > 1e-12:
+                    dx /= distance
+                    dy /= distance
+                else:
+                    angle = (left_index * 12.9898 + right_index * 78.233) % (
+                        2.0 * np.pi
+                    )
+                    dx = np.cos(angle)
+                    dy = np.sin(angle)
+                half_shortfall = 0.5 * shortfall
+                displacement[left_index, 0] += half_shortfall * dx
+                displacement[left_index, 1] += half_shortfall * dy
+                displacement[right_index, 0] -= half_shortfall * dx
+                displacement[right_index, 1] -= half_shortfall * dy
+                degree[left_index] += 1.0
+                degree[right_index] += 1.0
+            if active_count == 0:
+                break
+            for point in range(n_points):
+                if degree[point] > 0.0:
+                    result[point, 0] += displacement[point, 0] / degree[point]
+                    result[point, 1] += displacement[point, 1] / degree[point]
+        return result, adjusted
 
-        correction = 0.5 * shortfall[:, None] * direction
-        displacement = np.zeros_like(result)
-        degree = np.zeros(n_samples, dtype=np.float64)
-        np.add.at(displacement, left[active], correction[active])
-        np.add.at(displacement, right[active], -correction[active])
-        np.add.at(degree, left[active], 1.0)
-        np.add.at(degree, right[active], 1.0)
-        has_correction = degree > 0
-        result[has_correction] += (
-            displacement[has_correction] / degree[has_correction, None]
-        )
+    result, ever_adjusted = relax(
+        np.ascontiguousarray(coordinates),
+        np.ascontiguousarray(left),
+        np.ascontiguousarray(right),
+        float(threshold),
+        int(iterations),
+    )
 
     return result, {
         "min_dist_reference": reference_distance,
@@ -210,6 +333,7 @@ def density_gravity_layout(
     embedding: object,
     *,
     neighbors: int = 15,
+    community_sample_size: int = 50000,
     resolution: float = 1.0,
     random_state: int = 42,
     core_quantile: float = 0.95,
@@ -225,8 +349,11 @@ def density_gravity_layout(
     """Build feature-space density regions and refine an IMSTE layout.
 
     A compatible Euclidean feature-neighbor graph is reused when supplied;
-    otherwise RINND builds one. Leiden finds weighted density regions, then
-    points move toward density-weighted region cores. An optional local
+    otherwise RINND builds one. By default, Leiden finds weighted density regions
+    on a deterministic random sample, whose cell graph aggregates all KNN edges
+    and whose labels propagate through the KNN graph. Set
+    ``community_sample_size=0`` to run Leiden on every point. Points then move
+    toward density-weighted region cores. An optional local
     distance floor then separates feature-neighbor pairs whose 2D distances
     fall below ``min_dist`` times their median pre-gravity nearest-neighbor
     distance. No labels or notebook state are used.
@@ -237,6 +364,10 @@ def density_gravity_layout(
         raise ValueError("pack_regions must be a boolean.")
     if not np.isfinite(min_dist) or min_dist < 0.0:
         raise ValueError("min_dist must be finite and nonnegative.")
+    if isinstance(community_sample_size, (bool, np.bool_)) or not isinstance(
+        community_sample_size, (int, np.integer)
+    ) or int(community_sample_size) < 0:
+        raise ValueError("community_sample_size must be a nonnegative integer.")
     if issparse(features):
         raise ValueError("gravity refinement currently requires dense features.")
     X = np.asarray(features, dtype=np.float32)
@@ -253,6 +384,11 @@ def density_gravity_layout(
             "point_mass": np.ones(len(X), dtype=np.float32),
             "region_count": 0,
             "graph_seconds": 0.0,
+            "graph_build_seconds": 0.0,
+            "community_detection_seconds": 0.0,
+            "membership_propagation_seconds": 0.0,
+            "community_sample_size": 0,
+            "community_unassigned_fallback": 0,
             "neighbor_search_seconds": 0.0,
             "neighbor_graph_reused": feature_neighbor_graph is not None,
             "force_seconds": 0.0,
@@ -271,7 +407,6 @@ def density_gravity_layout(
             "`pip install 'igraph>=0.11' 'leidenalg>=0.10'`."
         ) from error
 
-    graph_started = time.perf_counter()
     reusable_graph = _compatible_neighbor_graph(
         feature_neighbor_graph,
         n_samples=len(X),
@@ -320,19 +455,49 @@ def density_gravity_layout(
         raw_mass, np.percentile(raw_mass, 1), np.percentile(raw_mass, 99)
     ).astype(np.float32)
 
-    rows = np.repeat(np.arange(len(X), dtype=np.int64), indices.shape[1])
-    columns = indices.reshape(-1)
-    edge_distances = distances.reshape(-1)
-    valid = (columns >= 0) & (columns != rows) & np.isfinite(edge_distances)
-    rows, columns, edge_distances = rows[valid], columns[valid], edge_distances[valid]
-    edge_weights = np.exp(
-        -edge_distances / np.maximum(radii[rows], 1e-12)
-    ).astype(np.float32)
+    sample_count = min(int(community_sample_size), len(X))
+    approximate = 0 < sample_count < len(X)
+    if approximate:
+        anchor_indices = np.sort(
+            np.random.default_rng(random_state).choice(
+                len(X), size=sample_count, replace=False
+            )
+        ).astype(np.int64)
+        propagation_started = time.perf_counter()
+        cell_membership, unassigned_fallback = _sample_community_membership(
+            indices,
+            anchor_indices,
+            np.arange(sample_count, dtype=np.int32),
+            sample_count,
+        )
+        membership_propagation_seconds = time.perf_counter() - propagation_started
+        graph_build_started = time.perf_counter()
+        rows, columns, edge_weights = _coarse_neighbor_graph_edges(
+            indices, distances, radii, cell_membership, sample_count
+        )
+        graph_size = sample_count
+    else:
+        anchor_indices = np.arange(len(X), dtype=np.int64)
+        membership_propagation_seconds = 0.0
+        unassigned_fallback = 0
+        graph_build_started = time.perf_counter()
+        rows = np.repeat(np.arange(len(X), dtype=np.int64), indices.shape[1])
+        columns = indices.reshape(-1)
+        edge_distances = distances.reshape(-1)
+        valid = (columns >= 0) & (columns != rows) & np.isfinite(edge_distances)
+        rows, columns, edge_distances = rows[valid], columns[valid], edge_distances[valid]
+        edge_radii = radii[rows]
+        edge_weights = np.exp(
+            -edge_distances / np.maximum(edge_radii, 1e-12)
+        ).astype(np.float32)
+        graph_size = len(X)
     graph = ig.Graph(
-        n=len(X), edges=zip(rows.tolist(), columns.tolist()), directed=False
+        n=graph_size, edges=np.column_stack((rows, columns)), directed=False
     )
-    graph.es["weight"] = edge_weights.tolist()
+    graph.es["weight"] = edge_weights
     graph.simplify(multiple=True, loops=True, combine_edges={"weight": "sum"})
+    graph_build_seconds = time.perf_counter() - graph_build_started
+    community_started = time.perf_counter()
     partition = leidenalg.find_partition(
         graph,
         leidenalg.RBConfigurationVertexPartition,
@@ -341,10 +506,19 @@ def density_gravity_layout(
         seed=int(random_state),
         n_iterations=2,
     )
-    membership = np.asarray(partition.membership, dtype=np.int32)
-    region_count = int(membership.max()) + 1
+    community_detection_seconds = time.perf_counter() - community_started
+    anchor_membership = np.asarray(partition.membership, dtype=np.int32)
+    region_count = int(anchor_membership.max()) + 1
+    if approximate:
+        membership = anchor_membership[cell_membership]
+    else:
+        membership = anchor_membership
     region_mass = np.bincount(membership, weights=point_mass, minlength=region_count)
-    graph_seconds = time.perf_counter() - graph_started
+    graph_seconds = (
+        graph_build_seconds
+        + community_detection_seconds
+        + membership_propagation_seconds
+    )
 
     order = np.argsort(membership, kind="stable")
     sorted_membership = membership[order]
@@ -392,6 +566,11 @@ def density_gravity_layout(
         "point_mass": point_mass,
         "region_count": region_count,
         "graph_seconds": graph_seconds,
+        "graph_build_seconds": graph_build_seconds,
+        "community_detection_seconds": community_detection_seconds,
+        "membership_propagation_seconds": membership_propagation_seconds,
+        "community_sample_size": int(sample_count if approximate else len(X)),
+        "community_unassigned_fallback": int(unassigned_fallback),
         "neighbor_search_seconds": neighbor_search_seconds,
         "neighbor_graph_reused": neighbor_graph_reused,
         "force_seconds": force_seconds,

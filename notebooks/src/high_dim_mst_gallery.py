@@ -406,7 +406,11 @@ def run_high_dim_mst_gallery(
                 "gravity_region_count": estimator.gravity_region_count_,
                 "gravity_regions_packed": estimator.gravity_regions_packed_,
                 "gravity_seconds": estimator.gravity_time_,
-                "mean_shift_seconds": estimator.mean_shift_time_,
+                "mean_shift_seconds": estimator.mean_shift_total_time_,
+                "mean_shift_neighbor_search_seconds": (
+                    estimator.mean_shift_neighbor_search_time_
+                ),
+                "mean_shift_refinement_seconds": estimator.mean_shift_time_,
                 "imste_seconds": estimator.imste_fit_time_,
                 "unique_graph_edges": len(estimator.graph_edges_),
                 "seconds": elapsed,

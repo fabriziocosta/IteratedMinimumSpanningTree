@@ -220,6 +220,16 @@ default. It produces no progress output when `trial_callback=None`. Supplying a
 `trial_callback` still invokes it after every trial, regardless of `verbose`;
 set `verbose=True` to also show optimizer and fit progress.
 
+## Refinement performance
+
+Gravity uses a sampled Leiden graph by default, with a maximum of 50,000
+vertices. Set `gravity_community_sample_size=0` to opt into exact full-graph
+community detection. Smaller `gravity_neighbors` values also reduce graph work.
+Mean shift and the optional distance floor use compiled, allocation-light loops.
+For a faster approximate fit, reduce `mean_shift_neighbors`,
+`gravity_min_dist_iterations`, or `gravity_community_sample_size`; lower distance
+floor iterations may leave more neighbor pairs below the requested floor.
+
 ## Data requirements
 
 `X` and `y` must have the same number of rows. Classification requires at least

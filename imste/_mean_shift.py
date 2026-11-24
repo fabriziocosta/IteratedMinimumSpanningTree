@@ -21,13 +21,58 @@ def embedding_neighbor_indices(embedding: object, neighbors: int) -> np.ndarray:
 
     k = int(neighbors)
     search = NearestNeighbors(
-        n_neighbors=min(k + 1, len(coordinates)), algorithm="kd_tree", n_jobs=-1
+        n_neighbors=k, algorithm="kd_tree", n_jobs=-1
     )
     search.fit(coordinates)
-    indices = search.kneighbors(coordinates, return_distance=False)
-    result = np.empty((len(coordinates), k), dtype=np.int64)
-    for row, row_indices in enumerate(indices):
-        result[row] = row_indices[row_indices != row][:k]
+    # Omitting X asks sklearn to query its indexed rows and exclude each
+    # query point itself, avoiding a k+1 result and per-row cleanup.
+    return search.kneighbors(return_distance=False)
+
+
+def _mean_shift_iteration(
+    coordinates: np.ndarray,
+    graph_indices: np.ndarray,
+    bandwidth: float,
+    step_size: float,
+) -> np.ndarray:
+    """Compute one synchronous, allocation-light mean-shift iteration."""
+    from numba import njit, prange
+
+    @njit(parallel=True, cache=True)
+    def update(current, neighbors, sigma, step):
+        n_samples = current.shape[0]
+        neighbor_count = neighbors.shape[1]
+        output = np.empty_like(current)
+        denominator = 2.0 * sigma * sigma
+        for row in prange(n_samples):
+            weight_sum = 0.0
+            mean_x = 0.0
+            mean_y = 0.0
+            for column in range(neighbor_count):
+                neighbor = neighbors[row, column]
+                dx = current[neighbor, 0] - current[row, 0]
+                dy = current[neighbor, 1] - current[row, 1]
+                distance_squared = dx * dx + dy * dy
+                weight = np.exp(-distance_squared / denominator)
+                weight_sum += weight
+                mean_x += current[neighbor, 0] * weight
+                mean_y += current[neighbor, 1] * weight
+            output[row, 0] = current[row, 0] + step * (
+                mean_x / max(weight_sum, 1e-12) - current[row, 0]
+            )
+            output[row, 1] = current[row, 1] + step * (
+                mean_y / max(weight_sum, 1e-12) - current[row, 1]
+            )
+        return output
+
+    # float32 halves memory traffic and matches the public embedding dtype.
+    result = update(
+        np.ascontiguousarray(coordinates, dtype=np.float32),
+        np.ascontiguousarray(graph_indices, dtype=np.int64),
+        float(bandwidth),
+        float(step_size),
+    )
+    result -= result.mean(axis=0, dtype=np.float64).astype(np.float32)
     return result
 
 
@@ -42,7 +87,7 @@ def gaussian_mean_shift_layout(
 ) -> tuple[np.ndarray, dict[str, float | int]]:
     """Shift coordinates using fixed 2D neighbors and refreshed 2D distances."""
 
-    coordinates = np.asarray(embedding, dtype=np.float64).copy()
+    coordinates = np.asarray(embedding, dtype=np.float32).copy()
     if coordinates.ndim != 2 or coordinates.shape[1] != 2 or len(coordinates) < 2:
         raise ValueError("embedding must have shape (n_samples >= 2, 2).")
     if not np.isfinite(coordinates).all():
@@ -72,16 +117,26 @@ def gaussian_mean_shift_layout(
     if iterations == 0 or step_size == 0:
         return coordinates.astype(np.float32), {"iterations": 0}
 
+    from numba import njit, prange
+
+    @njit(parallel=True, cache=True)
+    def kth_neighbor_distances(current, neighbors):
+        output = np.empty(current.shape[0], dtype=np.float32)
+        last_column = neighbors.shape[1] - 1
+        for row in prange(current.shape[0]):
+            neighbor = neighbors[row, last_column]
+            dx = current[neighbor, 0] - current[row, 0]
+            dy = current[neighbor, 1] - current[row, 1]
+            output[row] = np.sqrt(dx * dx + dy * dy)
+        return output
+
     for _ in range(int(iterations)):
-        offsets = coordinates[graph_indices] - coordinates[:, None, :]
-        distances = np.linalg.norm(offsets, axis=2)
+        distances = kth_neighbor_distances(coordinates, graph_indices)
         bandwidth = max(
-            float(np.median(distances[:, -1])) * float(bandwidth_factor), 1e-12
+            float(np.median(distances)) * float(bandwidth_factor), 1e-12
         )
-        weights = np.exp(-0.5 * (distances / bandwidth) ** 2)
-        local_means = (coordinates[graph_indices] * weights[:, :, None]).sum(axis=1)
-        local_means /= np.maximum(weights.sum(axis=1, keepdims=True), 1e-12)
-        coordinates += float(step_size) * (local_means - coordinates)
-        coordinates -= coordinates.mean(axis=0)
+        coordinates = _mean_shift_iteration(
+            coordinates, graph_indices, bandwidth, float(step_size)
+        )
 
     return coordinates.astype(np.float32), {"iterations": int(iterations)}

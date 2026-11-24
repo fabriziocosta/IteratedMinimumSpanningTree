@@ -441,7 +441,9 @@ def fit_20newsgroups_imste(
     timings = {
         "imste": estimator.imste_fit_time_,
         "gravity": estimator.gravity_time_,
-        "mean_shift": estimator.mean_shift_time_,
+        "mean_shift": estimator.mean_shift_total_time_,
+        "mean_shift_neighbor_search": estimator.mean_shift_neighbor_search_time_,
+        "mean_shift_refinement": estimator.mean_shift_time_,
     }
     return coordinates, estimator, timings
 

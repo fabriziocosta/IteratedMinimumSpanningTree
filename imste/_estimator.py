@@ -154,7 +154,15 @@ class IteratedMinimumSpanningTreeEmbedder(
         feature-space neighbors. Zero disables repulsion. Values above 1 request
         stronger expansion.
     gravity_neighbors : int, default=15
-        Feature-space neighbors used to build gravity regions.
+        Feature-space neighbors used to build gravity regions. Smaller values
+        reduce graph size and Leiden time, at the cost of less stable regions.
+    gravity_community_sample_size : int, default=50000
+        If positive, detect Leiden regions on this many deterministically sampled
+        points and propagate their region ids through the feature-neighbor graph.
+        Zero runs Leiden on every point (exact mode).
+    gravity_min_dist_iterations : int, default=32
+        Maximum compiled relaxation sweeps for the optional gravity distance
+        floor. Lower values are faster and may leave more pairs below the floor.
     gravity_resolution : float, default=1.0
         Leiden resolution used to identify gravity regions.
     gravity_core_quantile : float, default=0.95
@@ -253,6 +261,8 @@ class IteratedMinimumSpanningTreeEmbedder(
         label_strength: float = 0.0,
         target_strength: float = 0.0,
         target_bandwidth: float = 1.0,
+        gravity_community_sample_size: int = 50000,
+        gravity_min_dist_iterations: int = 32,
     ) -> None:
         self.n_msts = n_msts
         self.n_components = n_components
@@ -291,6 +301,8 @@ class IteratedMinimumSpanningTreeEmbedder(
         self.mst_neighbor_backend = mst_neighbor_backend
         self.include_knn_attraction = include_knn_attraction
         self.gravity_neighbors = gravity_neighbors
+        self.gravity_community_sample_size = gravity_community_sample_size
+        self.gravity_min_dist_iterations = gravity_min_dist_iterations
         self.gravity_resolution = gravity_resolution
         self.gravity_strength = gravity_strength
         self.gravity_min_dist = gravity_min_dist
@@ -380,6 +392,14 @@ class IteratedMinimumSpanningTreeEmbedder(
             raise ValueError("gravity refinement requires n_components >= 2.")
         gravity_neighbors = _positive_integer(
             "gravity_neighbors", self.gravity_neighbors
+        )
+        gravity_community_sample_size = _positive_integer(
+            "gravity_community_sample_size", self.gravity_community_sample_size,
+            allow_zero=True,
+        )
+        gravity_min_dist_iterations = _positive_integer(
+            "gravity_min_dist_iterations", self.gravity_min_dist_iterations,
+            allow_zero=True,
         )
         gravity_resolution = _finite_nonnegative(
             "gravity_resolution", self.gravity_resolution, strictly_positive=True
@@ -514,6 +534,8 @@ class IteratedMinimumSpanningTreeEmbedder(
             "metric": self.metric,
             "gravity_enabled": gravity_enabled,
             "gravity_neighbors": gravity_neighbors,
+            "gravity_community_sample_size": gravity_community_sample_size,
+            "gravity_min_dist_iterations": gravity_min_dist_iterations,
             "gravity_resolution": gravity_resolution,
             "gravity_strength": gravity_strength,
             "gravity_min_dist": gravity_min_dist,
@@ -906,19 +928,10 @@ class IteratedMinimumSpanningTreeEmbedder(
         n_samples = features.shape[0]
         k = min(int(neighbors), n_samples - 1)
         index = NearestNeighbors(
-            n_neighbors=min(k + 1, n_samples), metric=metric, n_jobs=-1
+            n_neighbors=k, metric=metric, n_jobs=-1
         ).fit(features)
-        distances, indices = index.kneighbors(features, return_distance=True)
-        result_indices = np.empty((n_samples, k), dtype=np.int64)
-        result_distances = np.empty((n_samples, k), dtype=np.float64)
-        for row in range(n_samples):
-            keep = indices[row] != row
-            row_indices = indices[row, keep][:k]
-            row_distances = distances[row, keep][:k]
-            order = np.argsort(row_distances, kind="stable")
-            result_indices[row] = row_indices[order]
-            result_distances[row] = row_distances[order]
-        return result_indices, result_distances
+        distances, indices = index.kneighbors(return_distance=True)
+        return indices.astype(np.int64, copy=False), distances
 
     def _apply_mean_shift(
         self,
@@ -928,6 +941,7 @@ class IteratedMinimumSpanningTreeEmbedder(
         self.embedding_before_mean_shift_ = self.embedding_.copy()
         self.mean_shift_neighbor_search_time_ = 0.0
         self.mean_shift_time_ = 0.0
+        self.mean_shift_total_time_ = 0.0
         self.mean_shift_iterations_ = 0
         iterations = int(options["mean_shift_iterations"])
         step_size = float(options["mean_shift_step_size"])
@@ -945,6 +959,7 @@ class IteratedMinimumSpanningTreeEmbedder(
         )
         self.mean_shift_neighbor_search_time_ = time.perf_counter() - started
         self.mean_shift_neighbor_graph_reused_ = True
+        refinement_started = time.perf_counter()
         refined, diagnostics = gaussian_mean_shift_layout(
             self.embedding_[:, :2],
             neighbor_indices=neighbor_indices,
@@ -954,7 +969,10 @@ class IteratedMinimumSpanningTreeEmbedder(
             iterations=iterations,
         )
         self.embedding_[:, :2] = refined
-        self.mean_shift_time_ = time.perf_counter() - started
+        self.mean_shift_time_ = time.perf_counter() - refinement_started
+        self.mean_shift_total_time_ = (
+            self.mean_shift_neighbor_search_time_ + self.mean_shift_time_
+        )
         self.mean_shift_iterations_ = int(diagnostics["iterations"])
 
     def _apply_gravity_min_dist_floor(
@@ -964,6 +982,7 @@ class IteratedMinimumSpanningTreeEmbedder(
     ) -> None:
         """Reapply the local spacing floor after all layout refinements."""
         fraction = float(options["gravity_min_dist"])
+        self.gravity_min_dist_time_ = 0.0
         if (
             not options["gravity_enabled"]
             or fraction == 0.0
@@ -979,6 +998,7 @@ class IteratedMinimumSpanningTreeEmbedder(
             feature_neighbor_graph[0],
             fraction,
             reference_embedding=self.embedding_before_gravity_[:, :2],
+            iterations=int(options["gravity_min_dist_iterations"]),
         )
         self.embedding_[:, :2] = refined
         self.gravity_min_dist_used_ = float(diagnostics["min_dist_threshold"])
@@ -986,7 +1006,8 @@ class IteratedMinimumSpanningTreeEmbedder(
         self.gravity_min_dist_pairs_adjusted_ = int(
             diagnostics["min_dist_pairs_adjusted"]
         )
-        self.gravity_time_ += time.perf_counter() - started
+        self.gravity_min_dist_time_ = time.perf_counter() - started
+        self.gravity_time_ += self.gravity_min_dist_time_
 
     def fit(self, X: object, y: object = None) -> "IteratedMinimumSpanningTreeEmbedder":
         """Fit the embedding and store coordinates for the input rows.
@@ -1008,11 +1029,14 @@ class IteratedMinimumSpanningTreeEmbedder(
         `multilevel_initialization_time_`, `final_embedding_optimization_time_`,
         `embedding_optimization_time_`, `optimizer_negative_sampling_time_`,
         `optimizer_coordinate_update_time_`, and total `fit_time_`. Gravity fits
-        also expose `gravity_neighbor_search_time_` and
-        `gravity_neighbor_graph_reused_`. Feature based FAMST gravity fits expose
-        the high-dimensional graph used by gravity as
-        `feature_neighbor_graph_`. Mean shift runs after gravity and exposes
-        its stage time and iteration count. GPU backends report negative
+        expose `gravity_graph_construction_time_`, `gravity_leiden_time_`,
+        `gravity_membership_propagation_time_`, `gravity_min_dist_time_`, and
+        `gravity_neighbor_search_time_`. By default Leiden uses at most 50,000
+        sampled points; set `gravity_community_sample_size=0` for exact fitting.
+        Feature based FAMST gravity fits expose the high-dimensional graph used by
+        gravity as `feature_neighbor_graph_`. Mean shift exposes arithmetic time
+        (`mean_shift_time_`), neighbor-search time, total time, and iteration count.
+        GPU backends report negative
         sampling and coordinate updates as one combined duration to avoid
         per-batch device event recording on long fits.
         """
@@ -1143,6 +1167,7 @@ class IteratedMinimumSpanningTreeEmbedder(
                     "n_components", "n_msts", "resolved_device",
                     "mst_neighbor_backend", "include_knn_attraction",
                     "gravity_neighbors", "gravity_resolution",
+                    "gravity_community_sample_size", "gravity_min_dist_iterations",
                     "gravity_strength", "gravity_min_dist", "gravity_core_quantile",
                     "gravity_mass_power",
                     "gravity_pack_regions", "gravity_pack_radius_quantile",
@@ -1178,6 +1203,7 @@ class IteratedMinimumSpanningTreeEmbedder(
                 X_checked,
                 self.embedding_before_gravity_[:, :2],
                 neighbors=min(options["gravity_neighbors"], n_samples - 1),
+                community_sample_size=options["gravity_community_sample_size"],
                 resolution=options["gravity_resolution"],
                 random_state=42 if self.random_state is None else self.random_state,
                 core_quantile=options["gravity_core_quantile"],
@@ -1204,7 +1230,10 @@ class IteratedMinimumSpanningTreeEmbedder(
                 gravity_diagnostics["min_dist_pairs_adjusted"]
             )
             self.gravity_graph_construction_time_ = float(
-                gravity_diagnostics["graph_seconds"]
+                gravity_diagnostics["graph_build_seconds"]
+            )
+            self.gravity_leiden_time_ = float(
+                gravity_diagnostics["community_detection_seconds"]
             )
             self.gravity_neighbor_search_time_ = float(
                 gravity_diagnostics["neighbor_search_seconds"]
@@ -1213,6 +1242,15 @@ class IteratedMinimumSpanningTreeEmbedder(
                 gravity_diagnostics["neighbor_graph_reused"]
             )
             self.gravity_force_time_ = float(gravity_diagnostics["force_seconds"])
+            self.gravity_membership_propagation_time_ = float(
+                gravity_diagnostics["membership_propagation_seconds"]
+            )
+            self.gravity_community_sample_size_ = int(
+                gravity_diagnostics["community_sample_size"]
+            )
+            self.gravity_community_fallback_points_ = int(
+                gravity_diagnostics["community_unassigned_fallback"]
+            )
             self.gravity_time_ = time.perf_counter() - gravity_started
         else:
             self.gravity_region_count_ = 0
@@ -1220,7 +1258,12 @@ class IteratedMinimumSpanningTreeEmbedder(
             self.gravity_min_dist_used_ = 0.0
             self.gravity_min_dist_reference_ = 0.0
             self.gravity_min_dist_pairs_adjusted_ = 0
+            self.gravity_min_dist_time_ = 0.0
             self.gravity_graph_construction_time_ = 0.0
+            self.gravity_leiden_time_ = 0.0
+            self.gravity_membership_propagation_time_ = 0.0
+            self.gravity_community_sample_size_ = 0
+            self.gravity_community_fallback_points_ = 0
             self.gravity_neighbor_search_time_ = 0.0
             self.gravity_neighbor_graph_reused_ = False
             self.gravity_force_time_ = 0.0

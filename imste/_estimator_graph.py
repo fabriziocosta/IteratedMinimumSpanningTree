@@ -142,6 +142,7 @@ class _EstimatorGraphMethods:
                 initialization_features,
                 self.embedding_before_gravity_[:, :2],
                 neighbors=min(options["gravity_neighbors"], n_samples - 1),
+                community_sample_size=options["gravity_community_sample_size"],
                 resolution=options["gravity_resolution"],
                 random_state=42 if self.random_state is None else self.random_state,
                 core_quantile=options["gravity_core_quantile"],
@@ -165,7 +166,15 @@ class _EstimatorGraphMethods:
             self.gravity_min_dist_pairs_adjusted_ = int(
                 diagnostics["min_dist_pairs_adjusted"]
             )
-            self.gravity_graph_construction_time_ = float(diagnostics["graph_seconds"])
+            self.gravity_graph_construction_time_ = float(diagnostics["graph_build_seconds"])
+            self.gravity_leiden_time_ = float(diagnostics["community_detection_seconds"])
+            self.gravity_membership_propagation_time_ = float(
+                diagnostics["membership_propagation_seconds"]
+            )
+            self.gravity_community_sample_size_ = int(diagnostics["community_sample_size"])
+            self.gravity_community_fallback_points_ = int(
+                diagnostics["community_unassigned_fallback"]
+            )
             self.gravity_neighbor_search_time_ = float(diagnostics["neighbor_search_seconds"])
             self.gravity_neighbor_graph_reused_ = bool(diagnostics["neighbor_graph_reused"])
             self.gravity_force_time_ = float(diagnostics["force_seconds"])
@@ -178,7 +187,12 @@ class _EstimatorGraphMethods:
             self.gravity_min_dist_used_ = 0.0
             self.gravity_min_dist_reference_ = 0.0
             self.gravity_min_dist_pairs_adjusted_ = 0
+            self.gravity_min_dist_time_ = 0.0
             self.gravity_graph_construction_time_ = 0.0
+            self.gravity_leiden_time_ = 0.0
+            self.gravity_membership_propagation_time_ = 0.0
+            self.gravity_community_sample_size_ = 0
+            self.gravity_community_fallback_points_ = 0
             self.gravity_neighbor_search_time_ = 0.0
             self.gravity_neighbor_graph_reused_ = False
             self.gravity_force_time_ = 0.0
