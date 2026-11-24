@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from io import BytesIO
 import inspect
 import math
 import sys
@@ -172,7 +173,11 @@ def make_live_tuning_display(labels, *, k=5, n_samples=40, figsize=(12, 8)):
                     f"(trial {trial['trial']})"
                 ),
             )
-            plot_handle.update(figure)
+            image = BytesIO()
+            figure.savefig(image, format="png", dpi=100, bbox_inches="tight")
+            from IPython.display import Image
+
+            plot_handle.update(Image(data=image.getvalue()))
             plt.close(figure)
 
     return show_trial, rows
